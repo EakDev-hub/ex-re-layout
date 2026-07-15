@@ -18,6 +18,8 @@
     enabled: false,
     mode: "edit",            // "edit" = คลิกเลือก/แก้ · "action" = ใช้งานหน้าเว็บตามปกติ
     selected: null,          // element ที่เลือกอยู่
+    multi: [],               // เลือกหลายชิ้น (Shift+ลากคลุม / Shift+คลิก)
+    marquee: null,           // กรอบคลุมเลือกที่กำลังลากอยู่
     editingText: false,      // กำลังแก้ข้อความ (contenteditable) อยู่ไหม
     dragging: null,          // ข้อมูล drag ปัจจุบัน
     changes: new Map(),      // Element -> change record
@@ -213,13 +215,23 @@
       background: #7c3aed; border-radius: 2px; z-index: 2147483646;
       box-shadow: 0 0 8px rgba(124,58,237,.9);
     }
+    .marquee {
+      position: fixed; pointer-events: none; display: none;
+      border: 1.5px dashed #7c3aed; background: rgba(124,58,237,.12);
+      z-index: 2147483646; border-radius: 3px;
+    }
+    .mbox {
+      position: fixed; pointer-events: none;
+      outline: 2px solid #7c3aed; outline-offset: -1px;
+      background: rgba(124,58,237,.07); z-index: 2147483645;
+    }
     .selectbox .tag {
       position: absolute; top: -22px; left: 0; background: #7c3aed; color: #fff;
       font-size: 11px; padding: 2px 8px; border-radius: 4px; white-space: nowrap;
     }
 
     .panel {
-      position: fixed; top: 16px; right: 16px; width: 290px; max-height: calc(100vh - 32px);
+      position: fixed; top: 16px; right: 16px; width: 302px; max-height: calc(100vh - 32px);
       background: #1c1530; color: #ece9f6; border-radius: 12px;
       box-shadow: 0 12px 40px rgba(0,0,0,.45); display: flex; flex-direction: column;
       font-size: 13px; overflow: hidden; border: 1px solid #3b2d63;
@@ -323,6 +335,54 @@
     .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
     .counter { font-size: 11px; color: #8d80c0; text-align: center; margin-top: 8px; }
+
+    /* ── โครงใหม่: modebar + tabs + pane ── */
+    .panel.min .panel-main { display: none; }
+    .panel-main { display: flex; flex-direction: column; min-height: 0; }
+    .modebar { display: flex; gap: 6px; padding: 10px 12px 0; }
+    .modebar .act { flex: 1; }
+    .tabs { display: flex; gap: 2px; margin-top: 8px; padding: 0 8px; border-bottom: 1px solid #3b2d63; }
+    .tab {
+      flex: 1; background: none; border: 0; border-bottom: 2px solid transparent;
+      color: #9c8fd0; padding: 8px 0 7px; font-size: 12px; cursor: pointer; position: relative;
+      font-family: inherit;
+    }
+    .tab:hover { color: #e5defc; }
+    .tab.on { color: #fff; border-bottom-color: #a78bfa; font-weight: 600; }
+    .tab .badge {
+      position: absolute; top: 1px; right: 4px; background: #7c3aed; color: #fff;
+      font-size: 9px; min-width: 14px; height: 14px; line-height: 14px;
+      border-radius: 7px; padding: 0 3px; display: none; font-weight: 600;
+    }
+    .tab .badge.show { display: inline-block; }
+    .tabpane { display: none; }
+    .tabpane.on { display: block; }
+
+    /* ปุ่มจัดการแบบ icon grid */
+    .qa { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 10px; }
+    .qa.qa3 { grid-template-columns: repeat(3, 1fr); }
+    .qa button {
+      background: #362a5e; border: 1px solid #4b3d78; color: #e5defc; border-radius: 8px;
+      padding: 7px 2px 5px; cursor: pointer; display: flex; flex-direction: column;
+      align-items: center; gap: 3px; font-family: inherit;
+    }
+    .qa button span { font-size: 15px; line-height: 1; }
+    .qa button small { font-size: 9.5px; color: #b9aee0; line-height: 1; }
+    .qa button:hover { background: #443574; }
+    .qa button.danger small { color: #fda4af; }
+    .qa button.danger:hover { background: #4c1d2e; }
+
+    /* หมวดพับได้ใน inspector */
+    details.sec { border: 1px solid #3b2d63; border-radius: 8px; margin-bottom: 8px; background: #221941; }
+    details.sec summary {
+      list-style: none; cursor: pointer; padding: 8px 10px; font-size: 12px; font-weight: 600;
+      color: #cfc7ec; display: flex; align-items: center; gap: 7px; user-select: none;
+    }
+    details.sec summary::-webkit-details-marker { display: none; }
+    details.sec summary::before { content: "▸"; color: #8d80c0; font-size: 10px; transition: transform .15s; }
+    details.sec[open] summary::before { transform: rotate(90deg); }
+    details.sec .secbody { padding: 2px 10px 8px; }
+    .changelist.tall { max-height: 340px; }
   </style>
 
   <div class="hoverbox"></div>
@@ -331,193 +391,236 @@
     <span class="rz rz-e"></span><span class="rz rz-s"></span><span class="rz rz-se"></span>
   </div>
   <div class="dropline"></div>
+  <div class="marquee"></div>
+  <div class="multiboxes"></div>
 
   <div class="panel">
     <div class="panel-header" id="dragbar">
       <span class="dot"></span><b>Relayout Editor</b>
       <button id="btn-undo" title="Undo (⌘Z)" disabled>↩︎</button>
       <button id="btn-redo" title="Redo (⇧⌘Z)" disabled>↪︎</button>
+      <button id="btn-min" title="ย่อ/ขยาย panel">▁</button>
       <button id="btn-close" title="ปิด">✕</button>
     </div>
-    <div class="panel-body">
-      <div class="btnrow" style="margin-bottom:8px">
+    <div class="panel-main">
+      <div class="modebar">
         <button class="act on" id="mode-edit">✏️ โหมดแก้ไข</button>
         <button class="act" id="mode-action">🖱 โหมดใช้งาน</button>
       </div>
-      <div class="hint">
-        คลิก = เลือก element · ลาก element ที่เลือก = ย้ายเป็น block<br>
-        (เส้นม่วง = แทรกก่อน/หลัง · กรอบม่วง = ยัดเข้าไปข้างในกล่อง)<br>
-        ดับเบิลคลิก = แก้ข้อความ · <b>Esc</b> = ยกเลิกเลือก · <b>Delete</b> = ซ่อน<br>
-        <b>⌘C</b>/<b>⌘V</b> = คัดลอก/วาง element
+      <div class="tabs">
+        <button class="tab on" data-tab="edit">แก้ไข</button>
+        <button class="tab" data-tab="add">เพิ่ม</button>
+        <button class="tab" data-tab="list">รายการ<span class="badge" id="tab-badge"></span></button>
+        <button class="tab" data-tab="export">ส่งออก</button>
       </div>
-
-      <div class="restorebar" id="restorebar">
-        <span id="restore-info"></span>
-        <div class="btnrow">
-          <button class="act primary" id="btn-restore">↻ กู้คืน</button>
-          <button class="act danger" id="btn-discard">ทิ้ง</button>
-        </div>
-      </div>
-
-      <div class="sel-info empty" id="sel-info">ยังไม่ได้เลือก element</div>
-      <div class="crumbs" id="crumbs"></div>
-
-      <div id="inspector" style="display:none">
-        <h4>สไตล์</h4>
-        <div class="row"><label>สีพื้นหลัง</label><input type="color" id="in-bg"></div>
-        <div class="row"><label>สีตัวอักษร</label><input type="color" id="in-color"></div>
-        <div class="row"><label>ขนาดฟอนต์ (px)</label><input type="number" id="in-fontsize" min="6" max="200"></div>
-        <div class="row"><label>มุมโค้ง (px)</label><input type="number" id="in-radius" min="0" max="500"></div>
-        <div class="row"><label>Padding (px)</label><input type="number" id="in-padding" min="0" max="300"></div>
-        <div class="row"><label>กว้าง</label><input type="text" id="in-width" placeholder="เช่น 300px / 50%"></div>
-        <div class="row"><label>สูง</label><input type="text" id="in-height" placeholder="auto"></div>
-        <div class="row">
-          <label>ตัวหนา / จัดชิด</label>
-          <button class="mini" id="in-bold"><b>B</b></button>
-          <button class="mini" id="in-al" title="ชิดซ้าย">⯇</button>
-          <button class="mini" id="in-ac" title="กึ่งกลาง">≡</button>
-          <button class="mini" id="in-ar" title="ชิดขวา">⯈</button>
-        </div>
-        <div class="row"><label>Margin (px)</label></div>
-        <div class="row marginrow">
-          <input type="number" id="in-mt" title="บน" placeholder="บน">
-          <input type="number" id="in-mr" title="ขวา" placeholder="ขวา">
-          <input type="number" id="in-mb" title="ล่าง" placeholder="ล่าง">
-          <input type="number" id="in-ml" title="ซ้าย" placeholder="ซ้าย">
-        </div>
-        <div class="row"><label>เส้นขอบ (px)</label><input type="number" id="in-borderw" min="0" max="50" style="width:52px"><input type="color" id="in-borderc"></div>
-        <div class="row"><label>เงา</label>
-          <select id="in-shadow">
-            <option value="none">ไม่มี</option>
-            <option value="0 2px 8px rgba(0,0,0,.15)">เบา</option>
-            <option value="0 6px 20px rgba(0,0,0,.25)">กลาง</option>
-            <option value="0 14px 40px rgba(0,0,0,.35)">หนัก</option>
-          </select>
-        </div>
-        <div class="row"><label>ความทึบ (%)</label><input type="range" id="in-opacity" min="10" max="100" value="100"></div>
-
-        <h4>Layout / Grid</h4>
-        <div class="row"><label>โหมดจัดวาง</label>
-          <select id="in-display">
-            <option value="">— เดิม —</option>
-            <option value="block">Block</option>
-            <option value="flex-row">Flex แถว</option>
-            <option value="flex-col">Flex คอลัมน์</option>
-            <option value="grid">Grid</option>
-          </select>
-        </div>
-        <div class="row"><label>จำนวนคอลัมน์ (grid)</label><input type="number" id="in-cols" min="1" max="12" value="3"></div>
-        <div class="row"><label>ระยะห่างช่อง Gap (px)</label><input type="number" id="in-gap" min="0" max="120"></div>
-
-        <h4>CSS กำหนดเอง</h4>
-        <textarea id="in-css" rows="4" spellcheck="false" placeholder="พิมพ์ CSS ตรง ๆ เช่น&#10;background: #1e293b;&#10;transform: rotate(2deg);"></textarea>
-        <div class="btnrow" style="margin-top:6px">
-          <button class="act primary" id="btn-apply-css">✨ ใช้ CSS นี้</button>
-        </div>
-
-        <div class="imgrow" id="col-tools">
-          <h4>คอลัมน์ตาราง</h4>
+      <div class="panel-body">
+        <div class="restorebar" id="restorebar">
+          <span id="restore-info"></span>
           <div class="btnrow">
-            <button class="act" id="btn-col-left">⬅ ย้ายคอลัมน์ซ้าย</button>
-            <button class="act" id="btn-col-right">➡ ย้ายคอลัมน์ขวา</button>
+            <button class="act primary" id="btn-restore">↻ กู้คืน</button>
+            <button class="act danger" id="btn-discard">ทิ้ง</button>
           </div>
         </div>
 
-        <div class="imgrow" id="img-tools">
-          <h4>รูปภาพ</h4>
-          <input type="text" class="wide" id="in-imgurl" placeholder="วาง URL รูปใหม่ แล้วกด Enter">
-          <label class="filelabel">📁 เลือกรูปจากเครื่อง<input type="file" id="in-imgfile" accept="image/*"></label>
+        <!-- ── แท็บ: แก้ไข ── -->
+        <div class="tabpane on" data-pane="edit">
+          <div class="sel-info empty" id="sel-info">ยังไม่ได้เลือก element</div>
+          <div class="crumbs" id="crumbs"></div>
+          <div class="hint" id="edit-hint">
+            <b>คลิก</b> element บนหน้าเว็บเพื่อเริ่มแก้ไข<br>
+            ลากที่เลือกอยู่ = ย้ายตำแหน่ง · ดับเบิลคลิก = แก้ข้อความ<br>
+            <b>Shift+ลากคลุม</b> = เลือกหลายชิ้นแล้วย้ายพร้อมกัน<br>
+            <b>⌘Z</b> undo · <b>Delete</b> ซ่อน · <b>⌘C</b>/<b>⌘V</b> คัดลอก/วาง
+          </div>
+
+          <div id="group-tools" style="display:none">
+            <div class="hint" id="group-info"></div>
+            <div class="btnrow">
+              <button class="act danger" id="btn-group-hide">🙈 ซ่อนทั้งกลุ่ม</button>
+              <button class="act danger" id="btn-group-delete">🗑 ลบทั้งกลุ่ม</button>
+            </div>
+            <div class="btnrow">
+              <button class="act" id="btn-group-clear">✕ ยกเลิกเลือกกลุ่ม (Esc)</button>
+            </div>
+          </div>
+
+          <div id="inspector" style="display:none">
+            <div class="qa">
+              <button id="btn-text" title="แก้ข้อความ (หรือดับเบิลคลิกที่ element)"><span>✏️</span><small>ข้อความ</small></button>
+              <button id="btn-up" title="ย้ายลำดับขึ้น"><span>⬆︎</span><small>ขึ้น</small></button>
+              <button id="btn-down" title="ย้ายลำดับลง"><span>⬇︎</span><small>ลง</small></button>
+              <button id="btn-copy" title="คัดลอก (⌘C)"><span>📄</span><small>คัดลอก</small></button>
+              <button id="btn-duplicate" title="ทำซ้ำต่อท้ายทันที"><span>⧉</span><small>ทำซ้ำ</small></button>
+              <button id="btn-hide" class="danger" title="ซ่อน (Delete)"><span>🙈</span><small>ซ่อน</small></button>
+              <button id="btn-delete" class="danger" title="ลบจริง (Shift+Delete)"><span>🗑</span><small>ลบ</small></button>
+              <button id="btn-reset" title="รีเซ็ต element นี้กลับค่าเดิม"><span>♻️</span><small>รีเซ็ต</small></button>
+            </div>
+
+            <div class="imgrow" id="img-tools">
+              <details class="sec" open>
+                <summary>รูปภาพ</summary>
+                <div class="secbody">
+                  <input type="text" class="wide" id="in-imgurl" placeholder="วาง URL รูปใหม่ แล้วกด Enter">
+                  <label class="filelabel">📁 เลือกรูปจากเครื่อง<input type="file" id="in-imgfile" accept="image/*"></label>
+                </div>
+              </details>
+            </div>
+
+            <div class="imgrow" id="col-tools">
+              <details class="sec" open>
+                <summary>คอลัมน์ตาราง</summary>
+                <div class="secbody">
+                  <div class="btnrow">
+                    <button class="act" id="btn-col-left">⬅ ย้ายซ้าย</button>
+                    <button class="act" id="btn-col-right">➡ ย้ายขวา</button>
+                  </div>
+                </div>
+              </details>
+            </div>
+
+            <details class="sec" open>
+              <summary>สี & ตัวอักษร</summary>
+              <div class="secbody">
+                <div class="row"><label>สีพื้นหลัง</label><input type="color" id="in-bg"></div>
+                <div class="row"><label>สีตัวอักษร</label><input type="color" id="in-color"></div>
+                <div class="row"><label>ขนาดฟอนต์ (px)</label><input type="number" id="in-fontsize" min="6" max="200"></div>
+                <div class="row">
+                  <label>ตัวหนา / จัดชิด</label>
+                  <button class="mini" id="in-bold"><b>B</b></button>
+                  <button class="mini" id="in-al" title="ชิดซ้าย">⯇</button>
+                  <button class="mini" id="in-ac" title="กึ่งกลาง">≡</button>
+                  <button class="mini" id="in-ar" title="ชิดขวา">⯈</button>
+                </div>
+              </div>
+            </details>
+
+            <details class="sec">
+              <summary>ขนาด & ระยะ</summary>
+              <div class="secbody">
+                <div class="row"><label>กว้าง</label><input type="text" id="in-width" placeholder="เช่น 300px / 50%"></div>
+                <div class="row"><label>สูง</label><input type="text" id="in-height" placeholder="auto"></div>
+                <div class="row"><label>Padding (px)</label><input type="number" id="in-padding" min="0" max="300"></div>
+                <div class="row"><label>Margin (px) บน/ขวา/ล่าง/ซ้าย</label></div>
+                <div class="row marginrow">
+                  <input type="number" id="in-mt" title="บน" placeholder="บน">
+                  <input type="number" id="in-mr" title="ขวา" placeholder="ขวา">
+                  <input type="number" id="in-mb" title="ล่าง" placeholder="ล่าง">
+                  <input type="number" id="in-ml" title="ซ้าย" placeholder="ซ้าย">
+                </div>
+              </div>
+            </details>
+
+            <details class="sec">
+              <summary>เส้นขอบ & เอฟเฟกต์</summary>
+              <div class="secbody">
+                <div class="row"><label>มุมโค้ง (px)</label><input type="number" id="in-radius" min="0" max="500"></div>
+                <div class="row"><label>เส้นขอบ (px)</label><input type="number" id="in-borderw" min="0" max="50" style="width:52px"><input type="color" id="in-borderc"></div>
+                <div class="row"><label>เงา</label>
+                  <select id="in-shadow">
+                    <option value="none">ไม่มี</option>
+                    <option value="0 2px 8px rgba(0,0,0,.15)">เบา</option>
+                    <option value="0 6px 20px rgba(0,0,0,.25)">กลาง</option>
+                    <option value="0 14px 40px rgba(0,0,0,.35)">หนัก</option>
+                  </select>
+                </div>
+                <div class="row"><label>ความทึบ (%)</label><input type="range" id="in-opacity" min="10" max="100" value="100"></div>
+              </div>
+            </details>
+
+            <details class="sec">
+              <summary>Layout / Grid</summary>
+              <div class="secbody">
+                <div class="row"><label>โหมดจัดวาง</label>
+                  <select id="in-display">
+                    <option value="">— เดิม —</option>
+                    <option value="block">Block</option>
+                    <option value="flex-row">Flex แถว</option>
+                    <option value="flex-col">Flex คอลัมน์</option>
+                    <option value="grid">Grid</option>
+                  </select>
+                </div>
+                <div class="row"><label>จำนวนคอลัมน์ (grid)</label><input type="number" id="in-cols" min="1" max="12" value="3"></div>
+                <div class="row"><label>ระยะห่างช่อง Gap (px)</label><input type="number" id="in-gap" min="0" max="120"></div>
+              </div>
+            </details>
+
+            <details class="sec">
+              <summary>CSS กำหนดเอง</summary>
+              <div class="secbody">
+                <textarea id="in-css" rows="4" spellcheck="false" placeholder="พิมพ์ CSS ตรง ๆ เช่น&#10;background: #1e293b;&#10;transform: rotate(2deg);"></textarea>
+                <div class="btnrow" style="margin-top:6px">
+                  <button class="act primary" id="btn-apply-css">✨ ใช้ CSS นี้</button>
+                </div>
+              </div>
+            </details>
+          </div>
         </div>
 
-        <h4>จัดการ</h4>
-        <div class="btnrow">
-          <button class="act" id="btn-text">✏️ แก้ข้อความ</button>
-          <button class="act" id="btn-up">⬆︎ ย้ายขึ้น</button>
-          <button class="act" id="btn-down">⬇︎ ย้ายลง</button>
+        <!-- ── แท็บ: เพิ่ม ── -->
+        <div class="tabpane" data-pane="add">
+          <div class="hint">วางต่อจาก element ที่เลือกอยู่ · ไม่ได้เลือก = ต่อท้ายหน้า<br>เส้นประของกล่อง/section ใหม่เป็นแค่ไกด์ตอนแก้ — โหมดใช้งาน/ส่งออก/screenshot จะไม่มี</div>
+          <h4>Element</h4>
+          <div class="qa qa3">
+            <button id="btn-add-box" title="กล่องเปล่า ลาก element อื่นยัดเข้าไปได้"><span>🔲</span><small>กล่อง</small></button>
+            <button id="btn-add-img" title="รูป placeholder เลือกแล้วเปลี่ยน URL/ไฟล์"><span>🖼️</span><small>รูปภาพ</small></button>
+            <button id="btn-add-btn" title="ปุ่มใหม่"><span>🔘</span><small>ปุ่ม</small></button>
+            <button id="btn-add-head" title="หัวข้อใหม่"><span>𝗛</span><small>หัวข้อ</small></button>
+            <button id="btn-add-text" title="ย่อหน้าข้อความ"><span>¶</span><small>ข้อความ</small></button>
+            <button id="btn-paste" title="วาง element ที่คัดลอกไว้ (⌘V)"><span>📋</span><small>วาง ⌘V</small></button>
+          </div>
+          <h4>Section</h4>
+          <div class="btnrow">
+            <button class="act" id="btn-add-before">➕ ก่อนที่เลือก</button>
+            <button class="act" id="btn-add-after">➕ หลังที่เลือก</button>
+          </div>
+          <div class="btnrow">
+            <button class="act" id="btn-add-end">➕ ต่อท้ายหน้า</button>
+          </div>
+          <h4>คลัง Asset (ใช้ข้ามหน้าได้)</h4>
+          <div class="btnrow">
+            <button class="act" id="btn-asset-save">📦 เก็บ element ที่เลือกเข้าคลัง</button>
+          </div>
+          <div class="changelist" id="assetlist"><div class="hint">คลังยังว่าง</div></div>
         </div>
-        <div class="btnrow">
-          <button class="act" id="btn-copy">📄 คัดลอก</button>
-          <button class="act" id="btn-duplicate">⧉ ทำซ้ำ</button>
+
+        <!-- ── แท็บ: รายการแก้ไข ── -->
+        <div class="tabpane" data-pane="list">
+          <h4 style="margin-top:2px">รายการแก้ไข</h4>
+          <div class="changelist tall" id="changelist"><div class="hint">ยังไม่มีการแก้ไข</div></div>
+          <div class="btnrow" style="margin-top:10px">
+            <button class="act danger" id="btn-reset-all">♻️ รีเซ็ตทั้งหน้า</button>
+          </div>
         </div>
-        <div class="btnrow">
-          <button class="act danger" id="btn-hide">🙈 ซ่อน</button>
-          <button class="act danger" id="btn-delete">🗑 ลบ</button>
-          <button class="act" id="btn-reset">♻️ รีเซ็ต</button>
+
+        <!-- ── แท็บ: ส่งออก ── -->
+        <div class="tabpane" data-pane="export">
+          <h4 style="margin-top:2px">รายงานส่งให้ Dev</h4>
+          <div class="btnrow">
+            <button class="act primary" id="btn-export-json">📋 รายงาน JSON</button>
+          </div>
+          <div class="btnrow">
+            <button class="act" id="btn-export-css">🎨 CSS</button>
+            <button class="act" id="btn-export-html">🧾 HTML</button>
+          </div>
+          <h4>Screenshot</h4>
+          <div class="btnrow">
+            <button class="act" id="btn-export-shot">📸 จอ</button>
+            <button class="act" id="btn-export-shot-el">📸 ที่เลือก</button>
+            <button class="act" id="btn-export-shot-full">📸 ทั้งหน้า</button>
+          </div>
+          <h4>ขนาดจอ (ทดสอบ Responsive)</h4>
+          <div class="btnrow">
+            <button class="act" id="btn-vp-390">📱 390</button>
+            <button class="act" id="btn-vp-768">📱 768</button>
+            <button class="act" id="btn-vp-1280">💻 1280</button>
+            <button class="act" id="btn-vp-restore">↩︎ คืน</button>
+          </div>
+          <h4>Import</h4>
+          <label class="filelabel">📥 Import รายงาน JSON กลับมาแก้ต่อ<input type="file" id="in-import" accept=".json,application/json"></label>
         </div>
-      </div>
 
-      <div class="btnrow">
-        <button class="act" id="btn-paste">📋 วาง (⌘V)</button>
+        <div class="counter" id="counter">ยังไม่มีการแก้ไข</div>
       </div>
-
-      <div class="divider"></div>
-
-      <h4>เพิ่มของใหม่</h4>
-      <div class="hint">วางต่อจาก element ที่เลือก · ไม่ได้เลือก = ต่อท้ายหน้า</div>
-      <div class="btnrow">
-        <button class="act" id="btn-add-box">🔲 กล่อง</button>
-        <button class="act" id="btn-add-img">🖼️ รูปภาพ</button>
-      </div>
-      <div class="btnrow">
-        <button class="act" id="btn-add-btn">🔘 ปุ่ม</button>
-        <button class="act" id="btn-add-head">𝗛 หัวข้อ</button>
-        <button class="act" id="btn-add-text">¶ ข้อความ</button>
-      </div>
-      <div class="btnrow">
-        <button class="act" id="btn-add-before">➕ Section ก่อนที่เลือก</button>
-      </div>
-      <div class="btnrow">
-        <button class="act" id="btn-add-after">➕ Section หลังที่เลือก</button>
-      </div>
-      <div class="btnrow">
-        <button class="act" id="btn-add-end">➕ Section ต่อท้ายหน้า</button>
-      </div>
-
-      <div class="divider"></div>
-
-      <h4>คลัง Asset (ใช้ข้ามหน้าได้)</h4>
-      <div class="btnrow">
-        <button class="act" id="btn-asset-save">📦 เก็บ element ที่เลือกเข้าคลัง</button>
-      </div>
-      <div class="changelist" id="assetlist"><div class="hint">คลังยังว่าง</div></div>
-
-      <div class="divider"></div>
-
-      <div class="divider"></div>
-
-      <h4>รายการแก้ไข</h4>
-      <div class="changelist" id="changelist"><div class="hint">ยังไม่มีการแก้ไข</div></div>
-      <div class="btnrow" style="margin-top:8px">
-        <button class="act danger" id="btn-reset-all">♻️ รีเซ็ตทั้งหน้า</button>
-      </div>
-
-      <div class="divider"></div>
-
-      <h4>ขนาดจอ (ทดสอบ Responsive)</h4>
-      <div class="btnrow">
-        <button class="act" id="btn-vp-390">📱 390</button>
-        <button class="act" id="btn-vp-768">📱 768</button>
-        <button class="act" id="btn-vp-1280">💻 1280</button>
-        <button class="act" id="btn-vp-restore">↩︎ คืนเดิม</button>
-      </div>
-
-      <div class="divider"></div>
-
-      <h4>Export ส่งให้ Dev</h4>
-      <div class="btnrow">
-        <button class="act primary" id="btn-export-json">📋 รายงาน JSON</button>
-        <button class="act" id="btn-export-css">🎨 CSS</button>
-      </div>
-      <div class="btnrow">
-        <button class="act" id="btn-export-html">🧾 HTML</button>
-      </div>
-      <div class="btnrow">
-        <button class="act" id="btn-export-shot">📸 จอ</button>
-        <button class="act" id="btn-export-shot-el">📸 ที่เลือก</button>
-        <button class="act" id="btn-export-shot-full">📸 ทั้งหน้า</button>
-      </div>
-      <label class="filelabel">📥 Import รายงาน JSON กลับมาแก้ต่อ<input type="file" id="in-import" accept=".json,application/json"></label>
-      <div class="counter" id="counter">ยังไม่มีการแก้ไข</div>
     </div>
   </div>
 
@@ -529,6 +632,8 @@
     hoverbox: $(".hoverbox"),
     selectbox: $(".selectbox"),
     dropline: $(".dropline"),
+    marquee: $(".marquee"),
+    multiboxes: $(".multiboxes"),
     seltag: $(".selectbox .tag"),
     panel: $(".panel"),
     selinfo: $("#sel-info"),
@@ -553,6 +658,7 @@
   function refreshBoxes() {
     placeBox(ui.selectbox, state.selected);
     if (state.selected) ui.seltag.textContent = shortLabel(state.selected);
+    if (state.multi.length > 1) drawMultiBoxes();
   }
 
   // ---------------------------------------------------------------
@@ -565,20 +671,108 @@
 
   function select(el) {
     if (state.editingText) stopTextEdit();
+    if (state.multi.length) { state.multi = []; clearMultiUI(); }
     state.selected = el;
     ui.hoverbox.style.display = "none";
     refreshBoxes();
     renderCrumbs(el);
+    const hint = $("#edit-hint");
     if (el) {
       ui.selinfo.classList.remove("empty");
       ui.selinfo.textContent = cssPath(el);
       ui.inspector.style.display = "block";
+      if (hint) hint.style.display = "none";
       populateInspector(el);
     } else {
       ui.selinfo.classList.add("empty");
       ui.selinfo.textContent = "ยังไม่ได้เลือก element";
       ui.inspector.style.display = "none";
+      if (hint) hint.style.display = "block";
     }
+  }
+
+  // ---------------------------------------------------------------
+  // multi-select: Shift+ลากคลุม / Shift+คลิก เลือกหลายชิ้น
+  // ---------------------------------------------------------------
+  function clearMultiUI() {
+    ui.multiboxes.innerHTML = "";
+    $("#group-tools").style.display = "none";
+  }
+
+  function drawMultiBoxes() {
+    ui.multiboxes.innerHTML = "";
+    for (const el of state.multi) {
+      if (!el.isConnected) continue;
+      const r = el.getBoundingClientRect();
+      const b = document.createElement("div");
+      b.className = "mbox";
+      b.style.cssText = `left:${r.left}px; top:${r.top}px; width:${r.width}px; height:${r.height}px;`;
+      ui.multiboxes.appendChild(b);
+    }
+  }
+
+  // ตัด element ซ้ำ/ซ้อนกันออก (เก็บเฉพาะตัวนอกสุด)
+  function normalizeMembers(list) {
+    const uniq = [...new Set(list)].filter(
+      (el) => el && el.isConnected && el !== document.body && el !== document.documentElement && !host.contains(el)
+    );
+    return uniq.filter((el) => !uniq.some((o) => o !== el && o.contains(el)));
+  }
+
+  function setMulti(els) {
+    els = normalizeMembers(els);
+    if (els.length <= 1) {
+      state.multi = [];
+      clearMultiUI();
+      select(els[0] || null);
+      return;
+    }
+    if (state.editingText) stopTextEdit();
+    state.selected = null;
+    state.multi = els;
+    ui.selectbox.style.display = "none";
+    ui.hoverbox.style.display = "none";
+    renderCrumbs(null);
+    ui.selinfo.classList.remove("empty");
+    ui.selinfo.textContent = `เลือกอยู่ ${els.length} ชิ้น (กลุ่ม)`;
+    ui.inspector.style.display = "none";
+    $("#edit-hint").style.display = "none";
+    $("#group-tools").style.display = "block";
+    $("#group-info").innerHTML =
+      `ลากชิ้นไหนก็ได้ในกลุ่ม = <b>ย้ายทั้ง ${els.length} ชิ้นพร้อมกัน</b><br>` +
+      `Shift+คลิก = เพิ่ม/เอาออก · <b>Delete</b> = ซ่อนทั้งกลุ่ม`;
+    drawMultiBoxes();
+    setTab("edit");
+  }
+
+  // หา element ที่อยู่ในกรอบคลุมทั้งชิ้น (เก็บตัวนอกสุด ไม่เจาะลงลูก)
+  function marqueePick(rect) {
+    const out = [];
+    const inside = (r) =>
+      r.left >= rect.left && r.right <= rect.right && r.top >= rect.top && r.bottom <= rect.bottom;
+    const overlaps = (r) =>
+      !(r.right < rect.left || r.left > rect.right || r.bottom < rect.top || r.top > rect.bottom);
+    const walk = (el) => {
+      for (const c of el.children) {
+        if (c === host) continue;
+        const r = c.getBoundingClientRect();
+        if (!r.width && !r.height) continue;
+        if (inside(r)) out.push(c);
+        else if (overlaps(r)) walk(c);
+      }
+    };
+    walk(document.body);
+    return out;
+  }
+
+  function toggleMulti(target) {
+    if (!target || target === document.body || target === document.documentElement) return;
+    let list = state.multi.length > 1 ? [...state.multi] : state.selected ? [state.selected] : [];
+    const hit = list.find((m) => m === target || m.contains(target));
+    if (hit) list = list.filter((m) => m !== hit);
+    else list.push(target);
+    setMulti(list);
+    if (list.length > 1) toast(`เลือกอยู่ ${list.length} ชิ้น`);
   }
 
   // breadcrumb ไต่ขึ้นไปเลือก element แม่ได้
@@ -644,6 +838,11 @@
     ui.counter.textContent = n
       ? `แก้ไขแล้ว ${state.changes.size} element · เพิ่มใหม่ ${state.addedSections.length} รายการ`
       : "ยังไม่มีการแก้ไข";
+    const badge = $("#tab-badge");
+    if (badge) {
+      badge.textContent = n > 99 ? "99+" : String(n);
+      badge.classList.toggle("show", n > 0);
+    }
     refreshChangeList();
   }
   function updateUndoButton() {
@@ -666,13 +865,13 @@
     el._rlTextBefore = el.innerHTML;
     el.setAttribute("contenteditable", "plaintext-only");
     el.focus();
-    $("#btn-text").textContent = "✅ เสร็จสิ้น";
+    $("#btn-text").innerHTML = "<span>✅</span><small>เสร็จสิ้น</small>";
     toast("พิมพ์แก้ข้อความได้เลย เสร็จแล้วกด Esc");
   }
   function stopTextEdit() {
     const el = state.selected;
     state.editingText = false;
-    $("#btn-text").textContent = "✏️ แก้ข้อความ";
+    $("#btn-text").innerHTML = "<span>✏️</span><small>ข้อความ</small>";
     if (!el) return;
     el.removeAttribute("contenteditable");
     const before = el._rlTextBefore;
@@ -716,6 +915,16 @@
       `margin:0 !important; z-index:2147483645 !important; pointer-events:none !important; opacity:.85 !important;` +
       `transform-origin:0 0; box-shadow:0 14px 36px rgba(0,0,0,.35) !important; outline:2px solid #7c3aed;` +
       `transition:none !important; overflow:hidden;`;
+    // ลากทั้งกลุ่ม: ติดป้ายจำนวนชิ้นบน ghost
+    if (d.members && d.members.length > 1) {
+      const badge = document.createElement("div");
+      badge.textContent = "× " + d.members.length;
+      badge.style.cssText =
+        "position:absolute; top:6px; right:6px; background:#7c3aed; color:#fff;" +
+        "font:700 12px/1.4 sans-serif; padding:2px 9px; border-radius:11px; z-index:9;" +
+        "box-shadow:0 2px 8px rgba(0,0,0,.3);";
+      g.appendChild(badge);
+    }
     d.ghost = g;
     document.body.appendChild(g);
     d.prevCursor = document.documentElement.style.cursor;
@@ -794,16 +1003,18 @@
     d.drop = null;
     ui.dropline.style.display = "none";
 
-    const prevPE = d.el.style.pointerEvents;
-    d.el.style.setProperty("pointer-events", "none", "important");
+    const prevPE = d.members.map((m) => m.style.pointerEvents);
+    d.members.forEach((m) => m.style.setProperty("pointer-events", "none", "important"));
     let target = document.elementFromPoint(e.clientX, e.clientY);
-    if (prevPE) d.el.style.setProperty("pointer-events", prevPE);
-    else d.el.style.removeProperty("pointer-events");
+    d.members.forEach((m, i) => {
+      if (prevPE[i]) m.style.setProperty("pointer-events", prevPE[i]);
+      else m.style.removeProperty("pointer-events");
+    });
 
-    if (!target || isOurUI(target) || target === d.el || d.el.contains(target)) return;
+    if (!target || isOurUI(target) || d.members.some((m) => m === target || m.contains(target))) return;
     if (target === document.documentElement || target === document.body) return;
     const parent = target.parentElement;
-    if (!parent || parent === d.el || d.el.contains(parent)) return;
+    if (!parent || d.members.some((m) => m === parent || m.contains(parent))) return;
 
     const r = target.getBoundingClientRect();
     const horizontal = isHorizontalFlow(target);
@@ -815,7 +1026,7 @@
         ? e.clientX > r.left + edge && e.clientX < r.right - edge
         : e.clientY > r.top + edge && e.clientY < r.bottom - edge;
       const kids = Array.from(target.children).filter(
-        (c) => c !== d.el && c !== host
+        (c) => !d.members.includes(c) && c !== host
       );
       // ต้องเป็นกล่องจริง ๆ (มีลูก หรือสูงพอ) กัน div ข้อความบรรทัดเดียวโดนยัดโดยไม่ตั้งใจ
       if (inCenter && (kids.length || r.height >= 60)) {
@@ -874,17 +1085,30 @@
     suppressClick = false; // เริ่ม interaction ใหม่ — click ที่จะตามมาไม่ใช่ click จากการลากรอบก่อน
     if (!state.enabled || state.mode !== "edit" || state.editingText || isOurUI(e.target, e)) return;
     if (e.button !== 0) return;
+    // Shift+ลาก = คลุมเลือกหลายชิ้น (Shift+คลิกเฉย ๆ = เพิ่ม/เอาออกทีละชิ้น จัดการตอน mouseup)
+    if (e.shiftKey) {
+      state.marquee = { x0: e.clientX, y0: e.clientY, moved: false };
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     const el = e.target;
-    if (el === state.selected && el !== document.body && el !== document.documentElement) {
-      // เตรียมลากย้าย element ที่เลือกอยู่ (ย้ายเป็น block)
+    // ลากชิ้นไหนก็ได้ในกลุ่มที่เลือกไว้ = ย้ายทั้งกลุ่ม / ลาก element เดี่ยวที่เลือกอยู่ = ย้ายตัวเดียว
+    const member = state.multi.length > 1
+      ? state.multi.find((m) => m === el || m.contains(el))
+      : null;
+    const single = el === state.selected && el !== document.body && el !== document.documentElement;
+    if (member || single) {
+      const members = member ? [...state.multi] : [el];
       state.dragging = {
-        el,
+        el: member || el,          // ตัวที่ใช้ทำ ghost
+        members,
         startX: e.clientX,
         startY: e.clientY,
         moved: false,
-        prevParent: el.parentElement,
-        prevNext: el.nextSibling,
-        prevOpacity: el.style.opacity,
+        prev: members.map((m) => ({
+          el: m, parent: m.parentElement, next: m.nextSibling, opacity: m.style.opacity,
+        })),
         drop: null, // { parent, ref }
       };
       e.preventDefault();
@@ -894,13 +1118,28 @@
 
   function onMouseMove(e) {
     if (!state.enabled || state.mode !== "edit") return;
+    // กำลังลากกรอบคลุมเลือก
+    const mq = state.marquee;
+    if (mq) {
+      if (!mq.moved && Math.hypot(e.clientX - mq.x0, e.clientY - mq.y0) > 4) mq.moved = true;
+      if (mq.moved) {
+        const L = ui.marquee.style;
+        L.display = "block";
+        L.left = Math.min(mq.x0, e.clientX) + "px";
+        L.top = Math.min(mq.y0, e.clientY) + "px";
+        L.width = Math.abs(e.clientX - mq.x0) + "px";
+        L.height = Math.abs(e.clientY - mq.y0) + "px";
+      }
+      e.preventDefault();
+      return;
+    }
     const d = state.dragging;
     if (d) {
       const dx = e.clientX - d.startX;
       const dy = e.clientY - d.startY;
       if (!d.moved && Math.hypot(dx, dy) > 4) {
         d.moved = true;
-        d.el.style.setProperty("opacity", "0.4", "important");
+        for (const p of d.prev) p.el.style.setProperty("opacity", "0.4", "important");
         makeGhost(d, e); // ยก element ขึ้นมาลอยตามเมาส์
       }
       if (d.moved) {
@@ -918,6 +1157,31 @@
   }
 
   function onMouseUp(e) {
+    // จบการคลุมเลือก
+    const mq = state.marquee;
+    if (mq) {
+      state.marquee = null;
+      ui.marquee.style.display = "none";
+      suppressClick = true;
+      if (!mq.moved) {
+        // Shift+คลิกเฉย ๆ = เพิ่ม/เอาออกจากกลุ่ม
+        if (!isOurUI(e.target, e)) toggleMulti(e.target);
+      } else {
+        const rect = {
+          left: Math.min(mq.x0, e.clientX), right: Math.max(mq.x0, e.clientX),
+          top: Math.min(mq.y0, e.clientY), bottom: Math.max(mq.y0, e.clientY),
+        };
+        const picked = marqueePick(rect);
+        if (!picked.length) toast("ไม่มี element อยู่ในกรอบทั้งชิ้น — ลากคลุมให้ครอบทั้งตัว");
+        else if (picked.length === 1) toast("คลุมได้ 1 ชิ้น — เลือกให้เหมือนคลิกปกติ");
+        else toast(`คลุมได้ ${picked.length} ชิ้น — ลากชิ้นไหนก็ได้เพื่อย้ายทั้งกลุ่ม`);
+        setMulti(picked);
+      }
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+
     const d = state.dragging;
     if (!d) return;
     state.dragging = null;
@@ -925,30 +1189,44 @@
     removeGhost(d);
     if (!d.moved) return; // เป็นแค่คลิกธรรมดา ปล่อยให้ click handler จัดการ
 
-    if (d.prevOpacity) d.el.style.setProperty("opacity", d.prevOpacity);
-    else d.el.style.removeProperty("opacity");
+    for (const p of d.prev) {
+      if (p.opacity) p.el.style.setProperty("opacity", p.opacity);
+      else p.el.style.removeProperty("opacity");
+    }
     suppressClick = true;
 
     if (d.drop) {
-      const { parent, ref } = d.drop;
-      const samePos = parent === d.el.parentElement && (ref === d.el || ref === d.el.nextSibling);
+      const { parent } = d.drop;
+      let ref = d.drop.ref;
+      while (ref && d.members.includes(ref)) ref = ref.nextSibling; // จุดวางต้องไม่ใช่สมาชิกกลุ่มเอง
+      const single = d.members.length === 1;
+      const samePos = single && parent === d.el.parentElement && (ref === d.el || ref === d.el.nextSibling);
       if (!samePos) {
-        const rec = getRecord(d.el); // สร้าง record ก่อนย้าย เพื่อให้ origParent/origNext เป็นตำแหน่งเดิมจริง
-        parent.insertBefore(d.el, ref);
-        syncMovedTo(d.el, rec);
-        const prevParent = d.prevParent, prevNext = d.prevNext, el = d.el;
-        const newParent = el.parentElement, newNext = el.nextSibling;
-        pushUndo(`ย้าย block ${shortLabel(el)}`, () => {
-          insertAt(el, prevParent, prevNext);
-          syncMovedTo(el, rec);
+        // เรียงสมาชิกตามลำดับใน DOM เดิม เพื่อคงลำดับไว้หลังวาง
+        const ordered = [...d.members].sort((a, b) =>
+          a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1);
+        // สร้าง record ก่อนย้าย เพื่อให้ origParent/origNext เป็นตำแหน่งเดิมจริง
+        const moves = ordered.map((el) => {
+          const p = d.prev.find((x) => x.el === el);
+          return { el, rec: getRecord(el), prevParent: p.parent, prevNext: p.next };
+        });
+        for (const m of moves) parent.insertBefore(m.el, ref);
+        for (const m of moves) syncMovedTo(m.el, m.rec);
+        const refNode = ref;
+        pushUndo(single ? `ย้าย block ${shortLabel(d.el)}` : `ย้าย ${moves.length} ชิ้นพร้อมกัน`, () => {
+          // คืนย้อนจากท้ายไปหน้า กันตำแหน่งอ้างอิงกันเอง (สมาชิกติดกัน)
+          for (let i = moves.length - 1; i >= 0; i--)
+            insertAt(moves[i].el, moves[i].prevParent, moves[i].prevNext);
+          for (const m of moves) syncMovedTo(m.el, m.rec);
           refreshBoxes();
         }, () => {
-          insertAt(el, newParent, newNext);
-          syncMovedTo(el, rec);
+          for (const m of moves) insertAt(m.el, parent, refNode);
+          for (const m of moves) syncMovedTo(m.el, m.rec);
           refreshBoxes();
         });
         updateCounter();
-        d.el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        if (single) d.el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        else toast(`↔ ย้าย ${moves.length} ชิ้นพร้อมกันแล้ว`);
       } else {
         toast("วางที่เดิม — ไม่มีอะไรเปลี่ยน");
       }
@@ -975,7 +1253,8 @@
     }
     e.preventDefault();
     e.stopPropagation();
-    select(e.target === state.selected ? e.target : e.target);
+    select(e.target);
+    setTab("edit"); // เลือก element จากหน้า = พาไปแท็บแก้ไขเสมอ
   }
 
   function onDblClick(e) {
@@ -991,11 +1270,17 @@
     if (e.key === "Escape") {
       if (isOurUI(e.target, e)) return; // กำลังพิมพ์ใน panel — ปล่อยตามปกติ
       if (state.editingText) { stopTextEdit(); refreshBoxes(); }
+      else if (state.multi.length > 1) setMulti([]); // ยกเลิกกลุ่มก่อน
       else select(null);
       e.preventDefault();
       return;
     }
     if (state.editingText || isOurUI(e.target, e)) return;
+    if ((e.key === "Delete" || e.key === "Backspace") && state.multi.length > 1) {
+      e.shiftKey ? groupDelete() : groupHide();
+      e.preventDefault();
+      return;
+    }
     if ((e.key === "Delete" || e.key === "Backspace") && state.selected) {
       e.shiftKey ? deleteSelected() : hideSelected(); // Shift+Delete = ลบจริง
       e.preventDefault();
@@ -1023,8 +1308,13 @@
   // mode: แก้ไข (cursor crosshair, คลิก = เลือก) / ใช้งานจริง (หน้าเว็บทำงานปกติ)
   // ---------------------------------------------------------------
   const modeStyle = document.createElement("style");
+  modeStyle.id = "__relayout_mode_style";
   modeStyle.textContent =
-    `html[data-rl-mode="edit"], html[data-rl-mode="edit"] *:not(#${HOST_ID}) { cursor: crosshair !important; }`;
+    `html[data-rl-mode="edit"], html[data-rl-mode="edit"] *:not(#${HOST_ID}) { cursor: crosshair !important; }\n` +
+    // เส้นประของ section/กล่องใหม่ = ไกด์ตอนแก้เท่านั้น ไม่ใช่สไตล์จริง
+    // (โหมดใช้งาน / screenshot / export จะไม่มีเส้นประ และ inline style ของผู้ใช้ทับ background นี้ได้)
+    `html[data-rl-mode="edit"] [data-rl-guide] { outline: 2px dashed rgba(124,58,237,.65); outline-offset: -2px; }\n` +
+    `html[data-rl-mode="edit"] [data-rl-guide="section"] { background-color: rgba(124,58,237,.06); }`;
 
   function setMode(m) {
     state.mode = m;
@@ -1106,6 +1396,78 @@
     select(null);
     updateCounter();
     toast("🗑 ลบ element แล้ว (↩︎ เอาคืนได้)");
+  }
+
+  // ซ่อนทั้งกลุ่มที่คลุมเลือกไว้ (undo เดียว)
+  function groupHide() {
+    const els = state.multi.filter((el) => el.isConnected);
+    if (els.length < 2) return;
+    const entries = els.map((el) => ({ el, rec: getRecord(el), prevDisplay: el.style.display }));
+    const apply = () => {
+      for (const en of entries) {
+        en.el.style.setProperty("display", "none", "important");
+        en.rec.hidden = true;
+        en.el.setAttribute("data-rl-hidden", "");
+      }
+      refreshBoxes();
+    };
+    apply();
+    pushUndo(`ซ่อน ${els.length} ชิ้น`, () => {
+      for (const en of entries) {
+        if (en.prevDisplay) en.el.style.display = en.prevDisplay;
+        else en.el.style.removeProperty("display");
+        en.rec.hidden = false;
+        en.el.removeAttribute("data-rl-hidden");
+      }
+      refreshBoxes();
+    }, apply);
+    setMulti([]);
+    updateCounter();
+    toast(`🙈 ซ่อน ${els.length} ชิ้นแล้ว (↩︎ เอาคืนได้)`);
+  }
+
+  // ลบจริงทั้งกลุ่ม (undo เดียว)
+  function groupDelete() {
+    const els = state.multi.filter((el) => el.isConnected);
+    if (els.length < 2) return;
+    const entries = els.map((el) => {
+      const added = el.hasAttribute("data-rl-added");
+      const i = added ? state.addedSections.findIndex((s) => s.el === el) : -1;
+      return {
+        el,
+        info: i >= 0 ? state.addedSections[i] : null,
+        rec: added ? null : getRecord(el),
+        parent: el.parentElement,
+        next: el.nextSibling,
+      };
+    });
+    const apply = () => {
+      for (const en of entries) {
+        en.el.remove();
+        if (en.rec) en.rec.deleted = true;
+        if (en.info) {
+          const j = state.addedSections.indexOf(en.info);
+          if (j >= 0) state.addedSections.splice(j, 1);
+        }
+      }
+      updateCounter();
+      refreshBoxes();
+    };
+    apply();
+    pushUndo(`ลบ ${els.length} ชิ้น`, () => {
+      // คืนจากท้ายไปหน้า กันตำแหน่งอ้างอิงกันเองเมื่อสมาชิกเป็นพี่น้องติดกัน
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const en = entries[i];
+        insertAt(en.el, en.parent, en.next);
+        if (en.rec) en.rec.deleted = false;
+        if (en.info) state.addedSections.push(en.info);
+      }
+      updateCounter();
+      refreshBoxes();
+    }, apply);
+    setMulti([]);
+    updateCounter();
+    toast(`🗑 ลบ ${els.length} ชิ้นแล้ว (↩︎ เอาคืนได้)`);
   }
 
   // สลับคอลัมน์ตาราง — สลับ cell ลำดับ a กับ b (ติดกัน) ในทุกแถวของตาราง
@@ -1319,10 +1681,10 @@
     state.seq += 1;
     const sec = document.createElement("div");
     sec.setAttribute("data-rl-added", "section-" + state.seq);
+    sec.setAttribute("data-rl-guide", "section"); // เส้นประ+พื้นจาง เห็นเฉพาะโหมดแก้ไข
     sec.style.cssText =
-      "padding:32px 24px; margin:16px; border:2px dashed #7c3aed; border-radius:12px;" +
-      "background:rgba(124,58,237,.06); text-align:center; color:#5b21b6;" +
-      "font-family:inherit;";
+      "padding:32px 24px; margin:16px; border-radius:12px;" +
+      "text-align:center; color:#5b21b6; font-family:inherit;";
     sec.innerHTML =
       `<div style="font-size:18px;font-weight:700;margin-bottom:6px;">Section ใหม่ #${state.seq}</div>` +
       `<div style="font-size:13px;opacity:.8;">ดับเบิลคลิกเพื่อแก้ข้อความ · คลิกเลือกแล้วปรับสี/ขนาด/ลากย้ายได้</div>`;
@@ -1340,8 +1702,9 @@
     state.seq += 1;
     const box = document.createElement("div");
     box.setAttribute("data-rl-added", "box-" + state.seq);
+    box.setAttribute("data-rl-guide", ""); // เส้นประเห็นเฉพาะโหมดแก้ไข
     box.style.cssText =
-      "min-height:120px; padding:16px; margin:12px; border:2px dashed #94a3b8;" +
+      "min-height:120px; padding:16px; margin:12px;" +
       "border-radius:10px; background:#f8fafc; color:#64748b; font-size:13px; font-family:inherit;";
     box.innerHTML = `กล่องใหม่ #${state.seq} — ดับเบิลคลิกแก้ข้อความ · ปรับสี/ขนาด · ลากย้ายได้`;
     insertNew(box, `เพิ่มกล่อง #${state.seq}`);
@@ -1405,12 +1768,13 @@
   // copy / paste element
   // ---------------------------------------------------------------
   function cleanClone(clone) {
-    const all = [clone, ...clone.querySelectorAll("[data-rl-changed],[data-rl-hidden],[data-rl-added],[data-rl-ghost],[contenteditable]")];
+    const all = [clone, ...clone.querySelectorAll("[data-rl-changed],[data-rl-hidden],[data-rl-added],[data-rl-ghost],[data-rl-guide],[contenteditable]")];
     for (const n of all) {
       n.removeAttribute("data-rl-changed");
       n.removeAttribute("data-rl-hidden");
       n.removeAttribute("data-rl-added");
       n.removeAttribute("data-rl-ghost");
+      n.removeAttribute("data-rl-guide");
       n.removeAttribute("contenteditable");
     }
     clone.style.removeProperty("opacity");
@@ -1495,12 +1859,18 @@
       if (rec.deleted) { item.deleted = true; item.summary.push("ลบ element นี้ออกเลย"); }
       if (item.summary.length) changes.push(item);
     }
-    const added = state.addedSections.map((s) => ({
-      position: s.position,
-      referenceSelector: s.refSelector,
-      html: s.el.outerHTML,
-      currentStyles: state.changes.get(s.el)?.styles || {},
-    }));
+    const added = state.addedSections.map((s) => {
+      // ตัด attribute ไกด์ (เส้นประ) ออกจาก HTML ที่ส่งให้ dev
+      const c = s.el.cloneNode(true);
+      c.removeAttribute("data-rl-guide");
+      c.querySelectorAll("[data-rl-guide]").forEach((n) => n.removeAttribute("data-rl-guide"));
+      return {
+        position: s.position,
+        referenceSelector: s.refSelector,
+        html: c.outerHTML,
+        currentStyles: state.changes.get(s.el)?.styles || {},
+      };
+    });
     return {
       tool: "Relayout Editor",
       url: location.href,
@@ -1528,6 +1898,9 @@
   function exportHTML() {
     const clone = document.documentElement.cloneNode(true);
     clone.querySelector("#" + HOST_ID)?.remove();
+    clone.querySelector("#__relayout_mode_style")?.remove();
+    clone.removeAttribute("data-rl-mode");
+    clone.querySelectorAll("[data-rl-guide]").forEach((n) => n.removeAttribute("data-rl-guide"));
     clone.querySelectorAll("[contenteditable]").forEach((n) => n.removeAttribute("contenteditable"));
     const header =
       `<!-- แก้ไขด้วย Relayout Editor ${new Date().toISOString()}\n` +
@@ -1538,13 +1911,22 @@
     toast("ดาวน์โหลดหน้า HTML แล้ว 🧾");
   }
 
-  function exportScreenshot() {
-    // ซ่อน UI ของเราก่อนถ่าย
+  // ซ่อน UI + เส้นไกด์ของเราก่อนถ่าย / เอาคืนหลังถ่าย
+  function uiOffForShot() {
     host.style.display = "none";
+    document.documentElement.removeAttribute("data-rl-mode");
+  }
+  function uiOnAfterShot() {
+    host.style.display = "";
+    document.documentElement.setAttribute("data-rl-mode", state.mode);
+  }
+
+  function exportScreenshot() {
+    uiOffForShot();
     requestAnimationFrame(() => {
       setTimeout(() => {
         chrome.runtime.sendMessage({ type: "rl-capture" }, (res) => {
-          host.style.display = "";
+          uiOnAfterShot();
           if (!res || !res.dataUrl) { toast("ถ่าย screenshot ไม่สำเร็จ"); return; }
           fetch(res.dataUrl)
             .then((r) => r.blob())
@@ -1606,10 +1988,10 @@
     el.scrollIntoView({ block: "nearest" });
     await wait(150);
     const r = el.getBoundingClientRect();
-    host.style.display = "none";
+    uiOffForShot();
     await wait(100);
     const dataUrl = await captureViewport();
-    host.style.display = "";
+    uiOnAfterShot();
     if (!dataUrl) { toast("ถ่าย screenshot ไม่สำเร็จ"); return; }
     const img = new Image();
     img.onload = () => {
@@ -1635,7 +2017,7 @@
     const prevScroll = scrollY;
     toast("📸 กำลังถ่ายทั้งหน้า อย่าขยับเมาส์/สกรอลล์…");
     await wait(600);
-    host.style.display = "none";
+    uiOffForShot();
     const shots = [];
     try {
       for (let y = 0; y < total; y += vh) {
@@ -1646,13 +2028,13 @@
         shots.push({ actualY: scrollY, dataUrl });
       }
     } catch {
-      host.style.display = "";
+      uiOnAfterShot();
       scrollTo(0, prevScroll);
       toast("ถ่ายทั้งหน้าไม่สำเร็จ");
       return;
     }
     scrollTo(0, prevScroll);
-    host.style.display = "";
+    uiOnAfterShot();
     const imgs = await Promise.all(shots.map(
       (s) => new Promise((res) => { const im = new Image(); im.onload = () => res(im); im.src = s.dataUrl; })
     ));
@@ -1758,6 +2140,9 @@
         }
       }
       if (!placed) document.body.appendChild(el);
+      // คืนไกด์เส้นประให้ (เห็นเฉพาะโหมดแก้ไข) เพื่อให้รู้ว่าเป็นของที่เพิ่มเอง
+      if (/^(section|box)-/.test(el.getAttribute("data-rl-added") || ""))
+        el.setAttribute("data-rl-guide", el.getAttribute("data-rl-added").startsWith("section") ? "section" : "");
       state.addedSections.push({ el, position: add.position, refSelector: add.referenceSelector });
       ok++;
     }
@@ -1849,7 +2234,11 @@
     const name = prompt("ตั้งชื่อ asset:", shortLabel(el));
     if (name === null) return;
     const clone = cleanClone(el.cloneNode(true));
+    // ถอดไกด์ชั่วคราว กัน background จาง ๆ ของไกด์ถูกอบติดเข้า asset
+    const hadGuide = el.getAttribute("data-rl-guide");
+    if (hadGuide !== null) el.removeAttribute("data-rl-guide");
     bakeStyles(el, clone);
+    if (hadGuide !== null) el.setAttribute("data-rl-guide", hadGuide);
     const asset = {
       id: Date.now() + "-" + ++state.seq,
       name: name.trim() || shortLabel(el),
@@ -2018,6 +2407,19 @@
   // ---------------------------------------------------------------
   // panel events
   // ---------------------------------------------------------------
+  // สลับแท็บ
+  function setTab(name) {
+    shadow.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t.dataset.tab === name));
+    shadow.querySelectorAll(".tabpane").forEach((p) => p.classList.toggle("on", p.dataset.pane === name));
+  }
+  shadow.querySelectorAll(".tab").forEach((t) =>
+    t.addEventListener("click", () => setTab(t.dataset.tab))
+  );
+  $("#btn-min").addEventListener("click", () => {
+    const min = ui.panel.classList.toggle("min");
+    $("#btn-min").textContent = min ? "▔" : "▁";
+    $("#btn-min").title = min ? "ขยาย panel" : "ย่อ panel";
+  });
   $("#btn-close").addEventListener("click", () => api.toggle());
   $("#btn-undo").addEventListener("click", doUndo);
   $("#btn-redo").addEventListener("click", doRedo);
@@ -2033,6 +2435,9 @@
   $("#btn-col-left").addEventListener("click", () => moveColumn(-1));
   $("#btn-col-right").addEventListener("click", () => moveColumn(1));
   $("#btn-hide").addEventListener("click", hideSelected);
+  $("#btn-group-hide").addEventListener("click", groupHide);
+  $("#btn-group-delete").addEventListener("click", groupDelete);
+  $("#btn-group-clear").addEventListener("click", () => setMulti([]));
   $("#btn-reset").addEventListener("click", resetSelected);
   $("#btn-reset-all").addEventListener("click", resetAll);
   $("#btn-copy").addEventListener("click", copySelected);
