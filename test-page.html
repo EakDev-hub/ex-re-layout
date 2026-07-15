@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>หน้าทดสอบ Relayout Editor</title>
+<style>
+  body { font-family: -apple-system, "Noto Sans Thai", sans-serif; margin: 0; color: #1f2937; }
+  header { background: #0f172a; color: #fff; padding: 20px 40px; display: flex; align-items: center; gap: 24px; }
+  header h1 { font-size: 20px; margin: 0; flex: 1; }
+  nav a { color: #cbd5e1; text-decoration: none; margin-left: 18px; font-size: 14px; }
+  .hero { background: linear-gradient(120deg, #e0f2fe, #ede9fe); padding: 70px 40px; text-align: center; }
+  .hero h2 { font-size: 34px; margin: 0 0 12px; }
+  .hero p { color: #475569; max-width: 520px; margin: 0 auto 24px; }
+  .btn { display: inline-block; background: #2563eb; color: #fff; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-weight: 600; }
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; padding: 40px; max-width: 1000px; margin: auto; }
+  .card { border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px; background: #fff; }
+  .card img { width: 100%; border-radius: 8px; }
+  .card h3 { margin: 12px 0 6px; }
+  .card p { color: #64748b; font-size: 14px; margin: 0; }
+  footer { background: #f1f5f9; padding: 24px 40px; text-align: center; color: #64748b; font-size: 13px; margin-top: 40px; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>🛍️ ร้านตัวอย่าง</h1>
+    <nav><a href="#">หน้าแรก</a><a href="#">สินค้า</a><a href="#">โปรโมชัน</a><a href="#">ติดต่อเรา</a></nav>
+  </header>
+
+  <section class="hero">
+    <h2>ยินดีต้อนรับสู่หน้าทดสอบ</h2>
+    <p>ลองใช้ Relayout Editor กับหน้านี้ได้เลย — คลิกเลือก element, ลากย้าย, เปลี่ยนสี, แก้ข้อความ, เปลี่ยนรูป แล้วกด export</p>
+    <a class="btn" href="#">สั่งซื้อเลย</a>
+  </section>
+
+  <div class="cards">
+    <div class="card">
+      <img src="https://picsum.photos/seed/a/400/240" alt="สินค้า 1">
+      <h3>สินค้า A</h3>
+      <p>คำอธิบายสินค้าแบบสั้น ลองแก้ข้อความนี้ดูได้</p>
+    </div>
+    <div class="card">
+      <img src="https://picsum.photos/seed/b/400/240" alt="สินค้า 2">
+      <h3>สินค้า B</h3>
+      <p>ลองลากการ์ดใบนี้ไปวางที่อื่น หรือกดย้ายขึ้น/ลง</p>
+    </div>
+    <div class="card">
+      <img src="https://picsum.photos/seed/c/400/240" alt="สินค้า 3">
+      <h3>สินค้า C</h3>
+      <p>ลองซ่อนการ์ดใบนี้ แล้วกด undo เอาคืน</p>
+    </div>
+  </div>
+
+  <section style="padding: 8px 40px 24px; max-width: 1000px; margin: auto;">
+    <h2 style="font-size: 22px;">ตารางราคาสินค้า (ลองสลับคอลัมน์)</h2>
+    <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+      <thead>
+        <tr style="background: #f1f5f9;">
+          <th style="border: 1px solid #e2e8f0; padding: 8px 12px; text-align: left;">สินค้า</th>
+          <th style="border: 1px solid #e2e8f0; padding: 8px 12px; text-align: left;">ราคา</th>
+          <th style="border: 1px solid #e2e8f0; padding: 8px 12px; text-align: left;">สต็อก</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="border: 1px solid #e2e8f0; padding: 8px 12px;">สินค้า A</td>
+          <td style="border: 1px solid #e2e8f0; padding: 8px 12px;">100 บาท</td>
+          <td style="border: 1px solid #e2e8f0; padding: 8px 12px;">12</td>
+        </tr>
+        <tr>
+          <td style="border: 1px solid #e2e8f0; padding: 8px 12px;">สินค้า B</td>
+          <td style="border: 1px solid #e2e8f0; padding: 8px 12px;">250 บาท</td>
+          <td style="border: 1px solid #e2e8f0; padding: 8px 12px;">5</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <footer>© 2026 ร้านตัวอย่าง — หน้านี้สร้างไว้เพื่อทดสอบ Relayout Editor</footer>
+</body>
+</html>

@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Relayout Editor",
+  "version": "1.0.0",
+  "description": "แก้ layout หน้าเว็บแบบ visual — ลากย้าย element เปลี่ยนสี เปลี่ยนรูป แก้ข้อความ เพิ่ม section แล้ว export ส่งให้ dev",
+  "action": {
+    "default_title": "เปิด/ปิด Relayout Editor"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": ["activeTab", "scripting", "storage"],
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
