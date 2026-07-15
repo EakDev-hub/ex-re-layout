@@ -1195,10 +1195,18 @@
     }
     suppressClick = true;
 
+    // จุดวางถูกคำนวณตอน mousemove ครั้งสุดท้าย — บนเว็บ SPA หน้าอาจ render ทับ
+    // ระหว่างลาก ทำให้ parent/ref หลุดจาก DOM แล้ว ต้องตรวจก่อน insert กัน NotFoundError
+    let dropLost = false;
+    if (d.drop && (!d.drop.parent || !d.drop.parent.isConnected)) {
+      d.drop = null;
+      dropLost = true;
+    }
     if (d.drop) {
       const { parent } = d.drop;
       let ref = d.drop.ref;
       while (ref && d.members.includes(ref)) ref = ref.nextSibling; // จุดวางต้องไม่ใช่สมาชิกกลุ่มเอง
+      if (ref && ref.parentNode !== parent) ref = null; // ref หลุดจาก parent ไปแล้ว = วางต่อท้ายแทน
       const single = d.members.length === 1;
       const samePos = single && parent === d.el.parentElement && (ref === d.el || ref === d.el.nextSibling);
       if (!samePos) {
@@ -1231,7 +1239,9 @@
         toast("วางที่เดิม — ไม่มีอะไรเปลี่ยน");
       }
     } else {
-      toast("ไม่มีจุดวาง — ลากไปวางบน element อื่น (เส้นม่วง = จุดที่จะแทรก)");
+      toast(dropLost
+        ? "จุดวางหายไปจากหน้า (หน้าเว็บ render ใหม่ระหว่างลาก) — ลองลากอีกครั้ง"
+        : "ไม่มีจุดวาง — ลากไปวางบน element อื่น (เส้นม่วง = จุดที่จะแทรก)");
     }
     refreshBoxes();
     e.preventDefault();
@@ -1516,6 +1526,7 @@
   function duplicateSelected() {
     const el = state.selected;
     if (!el) { toast("เลือก element ที่จะทำซ้ำก่อน"); return; }
+    if (!el.parentElement) { toast("element นี้หลุดจากหน้าไปแล้ว"); return; }
     state.seq += 1;
     const clone = cleanClone(el.cloneNode(true));
     clone.setAttribute("data-rl-added", "dup-" + state.seq);
@@ -1674,8 +1685,8 @@
   function addSection(position) {
     // position: 'before' | 'after' | 'end'
     const ref = state.selected;
-    if ((position === "before" || position === "after") && !ref) {
-      toast("เลือก element ก่อน แล้วค่อยเพิ่ม section");
+    if ((position === "before" || position === "after") && (!ref || !ref.parentElement)) {
+      toast(ref ? "element ที่เลือกหลุดจากหน้าไปแล้ว" : "เลือก element ก่อน แล้วค่อยเพิ่ม section");
       return;
     }
     state.seq += 1;
