@@ -466,6 +466,18 @@
               </details>
             </div>
 
+            <div class="imgrow" id="modal-tools">
+              <details class="sec" open>
+                <summary>Modal นี้</summary>
+                <div class="secbody">
+                  <div class="btnrow">
+                    <button class="act" id="btn-modal-hide">🙈 ซ่อน modal (สถานะเริ่มต้นของหน้า)</button>
+                  </div>
+                  <div class="hint">แก้ข้อความ/สีได้เหมือน element ทั่วไป · ซ่อนแล้วไปเลือกปุ่มที่จะผูกในหมวด "ผูก Modal"</div>
+                </div>
+              </details>
+            </div>
+
             <div class="imgrow" id="col-tools">
               <details class="sec" open>
                 <summary>คอลัมน์ตาราง</summary>
@@ -553,6 +565,25 @@
                 </div>
               </div>
             </details>
+
+            <details class="sec" id="bind-tools">
+              <summary>ผูก Modal (คลิกแล้วเปิด)</summary>
+              <div class="secbody">
+                <div class="hint" id="bind-none">ยังไม่มี modal ในหน้า — เพิ่มได้ที่แท็บ "เพิ่ม" (ปุ่ม 🪟 Modal)</div>
+                <div id="bind-row">
+                  <div class="row">
+                    <label>เลือก modal</label>
+                    <select id="in-modal-sel"></select>
+                    <button class="mini" id="btn-modal-open" title="เปิด modal นี้ขึ้นมาดู/แก้">👁</button>
+                  </div>
+                  <div class="btnrow">
+                    <button class="act primary" id="btn-bind-modal">🔗 ผูกกับ element นี้</button>
+                    <button class="act danger" id="btn-unbind-modal" style="display:none">✕ ยกเลิกผูก</button>
+                  </div>
+                  <div class="hint">ผูกแล้วไปลองคลิกใน "โหมดใช้งาน" ได้เลย · HTML ที่ export ไปก็คลิกเปิดได้จริง</div>
+                </div>
+              </div>
+            </details>
           </div>
         </div>
 
@@ -566,6 +597,7 @@
             <button id="btn-add-btn" title="ปุ่มใหม่"><span>🔘</span><small>ปุ่ม</small></button>
             <button id="btn-add-head" title="หัวข้อใหม่"><span>𝗛</span><small>หัวข้อ</small></button>
             <button id="btn-add-text" title="ย่อหน้าข้อความ"><span>¶</span><small>ข้อความ</small></button>
+            <button id="btn-add-modal" title="กล่อง modal ลอยกลางจอ — ผูกกับปุ่มให้คลิกเปิดได้"><span>🪟</span><small>Modal</small></button>
             <button id="btn-paste" title="วาง element ที่คัดลอกไว้ (⌘V)"><span>📋</span><small>วาง ⌘V</small></button>
           </div>
           <h4>Section</h4>
@@ -831,6 +863,23 @@
     ui.imgtools.classList.toggle("show", isImg);
     $("#col-tools").classList.toggle("show", !!(el.closest && el.closest("td, th")));
     $("#in-imgurl").value = "";
+    // เครื่องมือ modal + หมวดผูก modal
+    $("#modal-tools").classList.toggle("show", !!(el.closest && el.closest("[data-rl-modal]")));
+    const modals = Array.from(document.querySelectorAll("[data-rl-modal]"));
+    const msel = $("#in-modal-sel");
+    msel.innerHTML = "";
+    for (const m of modals) {
+      const o = document.createElement("option");
+      o.value = m.getAttribute("data-rl-modal");
+      const h = m.querySelector("h1,h2,h3,h4");
+      o.textContent = h && h.textContent.trim() ? h.textContent.trim().slice(0, 26) : o.value;
+      msel.appendChild(o);
+    }
+    $("#bind-none").style.display = modals.length ? "none" : "";
+    $("#bind-row").style.display = modals.length ? "" : "none";
+    const bound = el.getAttribute && el.getAttribute("data-rl-opens-modal");
+    if (bound) msel.value = bound;
+    $("#btn-unbind-modal").style.display = bound ? "" : "none";
   }
 
   function updateCounter() {
@@ -1249,7 +1298,26 @@
   }
 
   function onClick(e) {
-    if (!state.enabled || state.mode !== "edit" || isOurUI(e.target, e)) return;
+    if (!state.enabled || isOurUI(e.target, e)) return;
+    // โหมดใช้งาน: จัดการเปิด/ปิด modal ที่ผูกไว้ (สำรองกรณี CSP บล็อก inline onclick)
+    if (state.mode === "action") {
+      const t = e.target;
+      const trigger = t.closest ? t.closest("[data-rl-opens-modal]") : null;
+      if (trigger) {
+        e.preventDefault();
+        openModal(trigger.getAttribute("data-rl-opens-modal"));
+        return;
+      }
+      const closer = t.closest ? t.closest("[data-rl-modal-close]") : null;
+      if (closer) {
+        e.preventDefault();
+        const m = closer.closest("[data-rl-modal]");
+        if (m) m.style.display = "none";
+        return;
+      }
+      if (t.hasAttribute && t.hasAttribute("data-rl-modal")) t.style.display = "none"; // คลิกฉากหลัง = ปิด
+      return;
+    }
     if (suppressClick) {
       suppressClick = false;
       e.preventDefault();
@@ -1576,6 +1644,11 @@
     if (rec.text && rec.text.from !== undefined) el.innerHTML = rec.text.from;
     if (rec.image && el.tagName === "IMG") el.src = rec.image.from;
     if (rec.hidden) el.style.removeProperty("display");
+    if (rec.opensModal) {
+      el.removeAttribute("data-rl-opens-modal");
+      if (rec.prevOnclick) el.setAttribute("onclick", rec.prevOnclick);
+      else el.removeAttribute("onclick");
+    }
     if (
       rec.origParent && rec.origParent.isConnected &&
       (el.parentElement !== rec.origParent || el.nextSibling !== rec.origNext)
@@ -1741,6 +1814,106 @@
     toast("เพิ่มรูปแล้ว 🖼️ — เลือกรูปเพื่อเปลี่ยน URL/ไฟล์");
   }
 
+  // ---------------------------------------------------------------
+  // modal: สร้าง + ผูกกับปุ่ม (คลิกเปิดในโหมดใช้งาน และใน HTML ที่ export)
+  // ---------------------------------------------------------------
+  // inline onclick ทำให้ HTML ที่ export ไปทำงานได้เอง / delegated handler ใน
+  // editor (onClick โหมดใช้งาน) เป็นตัวสำรองบนเว็บที่ CSP บล็อก inline script
+  function bindOnclickStr(id) {
+    return `var m=document.querySelector('[data-rl-modal="${id}"]');if(m)m.style.display='flex';return false;`;
+  }
+
+  function openModal(id) {
+    const m = document.querySelector(`[data-rl-modal="${id}"]`);
+    if (m) m.style.display = "flex";
+    return m;
+  }
+
+  function addModal() {
+    state.seq += 1;
+    const id = "m" + Date.now().toString(36) + state.seq; // กันชนกับ modal จาก draft เก่า
+    const overlay = document.createElement("div");
+    overlay.setAttribute("data-rl-added", "modal-" + state.seq);
+    overlay.setAttribute("data-rl-modal", id);
+    overlay.setAttribute("onclick", "if(event.target===this)this.style.display='none'");
+    overlay.style.cssText =
+      "display:flex; position:fixed; inset:0; background:rgba(15,23,42,.55); z-index:2147483000;" +
+      "align-items:center; justify-content:center; font-family:inherit;";
+    overlay.innerHTML =
+      `<div style="background:#fff; border-radius:14px; padding:28px 32px; max-width:420px; width:90%;` +
+      ` box-shadow:0 24px 80px rgba(0,0,0,.35); position:relative; color:#1f2937;">` +
+      `<button data-rl-modal-close onclick="this.closest('[data-rl-modal]').style.display='none';return false"` +
+      ` style="position:absolute; top:10px; right:12px; border:0; background:none; font-size:20px; cursor:pointer; color:#94a3b8;">✕</button>` +
+      `<h3 style="margin:0 0 10px; font-size:20px;">Modal ใหม่ #${state.seq}</h3>` +
+      `<p style="margin:0 0 18px; line-height:1.65; color:#475569;">ดับเบิลคลิกแก้ข้อความได้เลย · เสร็จแล้วกดซ่อน modal ในหมวด "Modal นี้" แล้วไปเลือกปุ่มที่จะผูก</p>` +
+      `<button data-rl-modal-close onclick="this.closest('[data-rl-modal]').style.display='none';return false"` +
+      ` style="background:#7c3aed; color:#fff; border:0; border-radius:8px; padding:10px 24px; font-weight:600; cursor:pointer;">ปิด</button>` +
+      `</div>`;
+    document.body.appendChild(overlay);
+    trackAdded(overlay, "end", "body", `เพิ่ม modal #${state.seq}`);
+    toast("เพิ่ม modal แล้ว 🪟 — แก้ข้อความ/สไตล์ได้เลย แล้วผูกกับปุ่มที่ต้องการ");
+  }
+
+  function bindModal() {
+    const el = state.selected;
+    if (!el) { toast("เลือกปุ่ม/element ที่จะผูกก่อน"); return; }
+    const id = $("#in-modal-sel").value;
+    if (!id) { toast("ยังไม่มี modal — เพิ่มที่แท็บ \"เพิ่ม\" ก่อน"); return; }
+    if (el.closest("[data-rl-modal]")) { toast("ผูกจาก element ข้างใน modal ไม่ได้ — เลือกปุ่มบนหน้า"); return; }
+    const rec = getRecord(el);
+    const prev = {
+      attr: el.getAttribute("data-rl-opens-modal"),
+      onclick: el.getAttribute("onclick"),
+      recModal: rec.opensModal || null,
+    };
+    if (rec.prevOnclick === undefined) rec.prevOnclick = prev.onclick; // onclick เดิมของหน้า ไว้คืนตอน reset
+    el.setAttribute("data-rl-opens-modal", id);
+    el.setAttribute("onclick", bindOnclickStr(id));
+    rec.opensModal = id;
+    pushUndo(`ผูก modal กับ ${shortLabel(el)}`, () => {
+      if (prev.attr) el.setAttribute("data-rl-opens-modal", prev.attr);
+      else el.removeAttribute("data-rl-opens-modal");
+      if (prev.onclick) el.setAttribute("onclick", prev.onclick);
+      else el.removeAttribute("onclick");
+      rec.opensModal = prev.recModal;
+      if (state.selected === el) populateInspector(el);
+    }, () => {
+      el.setAttribute("data-rl-opens-modal", id);
+      el.setAttribute("onclick", bindOnclickStr(id));
+      rec.opensModal = id;
+      if (state.selected === el) populateInspector(el);
+    });
+    updateCounter();
+    populateInspector(el);
+    const m = document.querySelector(`[data-rl-modal="${id}"]`);
+    if (m) m.style.display = "none"; // เก็บ modal เข้าสถานะเริ่มต้น พร้อมลองกด
+    toast(`🔗 ผูกแล้ว — สลับ "โหมดใช้งาน" แล้วคลิก ${shortLabel(el)} เพื่อเปิด modal`);
+  }
+
+  function unbindModal() {
+    const el = state.selected;
+    if (!el || !el.getAttribute("data-rl-opens-modal")) return;
+    const rec = getRecord(el);
+    const prevAttr = el.getAttribute("data-rl-opens-modal");
+    const prevClick = el.getAttribute("onclick");
+    const clear = () => {
+      el.removeAttribute("data-rl-opens-modal");
+      if (rec.prevOnclick) el.setAttribute("onclick", rec.prevOnclick);
+      else el.removeAttribute("onclick");
+      rec.opensModal = null;
+      if (state.selected === el) populateInspector(el);
+    };
+    clear();
+    pushUndo(`ยกเลิกผูก modal ของ ${shortLabel(el)}`, () => {
+      el.setAttribute("data-rl-opens-modal", prevAttr);
+      if (prevClick) el.setAttribute("onclick", prevClick);
+      rec.opensModal = prevAttr;
+      if (state.selected === el) populateInspector(el);
+    }, clear);
+    updateCounter();
+    toast("ยกเลิกผูก modal แล้ว");
+  }
+
   // element library: ปุ่ม / หัวข้อ / ย่อหน้าข้อความ
   function addButtonEl() {
     state.seq += 1;
@@ -1865,6 +2038,10 @@
       if (rec.colSwaps && rec.colSwaps.length) {
         item.columnSwaps = rec.colSwaps;
         item.summary.push("สลับคอลัมน์ตาราง " + rec.colSwaps.map(([a, b]) => `${a + 1}↔${b + 1}`).join(", "));
+      }
+      if (rec.opensModal) {
+        item.opensModal = rec.opensModal;
+        item.summary.push(`ผูกให้คลิกแล้วเปิด modal "${rec.opensModal}"`);
       }
       if (rec.hidden) { item.hidden = true; item.summary.push("ซ่อน element นี้"); }
       if (rec.deleted) { item.deleted = true; item.summary.push("ลบ element นี้ออกเลย"); }
@@ -2129,6 +2306,12 @@
           rec.colSwaps.push([a, b]);
         }
       }
+      if (item.opensModal) {
+        if (rec.prevOnclick === undefined) rec.prevOnclick = el.getAttribute("onclick");
+        el.setAttribute("data-rl-opens-modal", item.opensModal);
+        el.setAttribute("onclick", bindOnclickStr(item.opensModal));
+        rec.opensModal = item.opensModal;
+      }
       if (item.hidden) {
         el.style.setProperty("display", "none", "important");
         rec.hidden = true;
@@ -2328,6 +2511,7 @@
       if (rec.image) kinds.push("รูป");
       if (rec.movedTo || rec.domMoved) kinds.push("ย้าย");
       if (rec.colSwaps && rec.colSwaps.length) kinds.push("คอลัมน์");
+      if (rec.opensModal) kinds.push("ผูก modal");
       if (rec.hidden) kinds.push("ซ่อน");
       if (rec.deleted) kinds.push("ลบ");
       if (!kinds.length) continue;
@@ -2460,6 +2644,20 @@
   $("#btn-add-btn").addEventListener("click", addButtonEl);
   $("#btn-add-head").addEventListener("click", addHeadingEl);
   $("#btn-add-text").addEventListener("click", addTextEl);
+  $("#btn-add-modal").addEventListener("click", addModal);
+  $("#btn-bind-modal").addEventListener("click", bindModal);
+  $("#btn-unbind-modal").addEventListener("click", unbindModal);
+  $("#btn-modal-open").addEventListener("click", () => {
+    const id = $("#in-modal-sel").value;
+    if (id && openModal(id)) toast("👁 เปิด modal ให้ดู/แก้แล้ว");
+  });
+  $("#btn-modal-hide").addEventListener("click", () => {
+    const m = state.selected && state.selected.closest && state.selected.closest("[data-rl-modal]");
+    if (!m) return;
+    m.style.display = "none";
+    select(null);
+    toast("🙈 ซ่อน modal แล้ว (สถานะเริ่มต้น) — เลือกปุ่มแล้วผูกได้เลย");
+  });
   $("#btn-add-before").addEventListener("click", () => addSection("before"));
   $("#btn-add-after").addEventListener("click", () => addSection("after"));
   $("#btn-add-end").addEventListener("click", () => addSection("end"));
