@@ -3,13 +3,20 @@
 (() => {
   "use strict";
 
-  // ถ้ามี instance อยู่แล้ว -> toggle
-  if (window.__relayoutEditor) {
-    window.__relayoutEditor.toggle();
-    return;
-  }
-
   const HOST_ID = "__relayout_host";
+
+  // ถ้ามี instance อยู่แล้ว -> toggle
+  // ถ้า toggle พัง (instance เก่าถูก orphan หลัง reload extension) = เคลียร์ทิ้งแล้วสร้างใหม่
+  if (window.__relayoutEditor) {
+    try {
+      window.__relayoutEditor.toggle();
+      return;
+    } catch (e) {
+      try { window.__relayoutEditor = null; } catch (_) {}
+    }
+  }
+  // เก็บกวาด host เก่าที่อาจค้างในหน้าจากการ inject ครั้งก่อน
+  document.getElementById(HOST_ID)?.remove();
 
   // ---------------------------------------------------------------
   // state
@@ -28,6 +35,8 @@
     redoStack: [],           // action ที่ undo ไปแล้ว รอ redo
     clipboard: null,         // { node, from } element ที่คัดลอกไว้
     seq: 0,
+    // โหมดหน้าเปล่า: ซ่อนเนื้อหาเดิมของเว็บ แล้วออกแบบหน้าใหม่บน canvas ว่าง
+    newPage: { active: false, canvas: null, hidden: [], prevBodyBg: null, width: "1280px" },
   };
 
   // ---------------------------------------------------------------
@@ -183,206 +192,326 @@
   host.style.cssText = "all:initial; position:fixed; z-index:2147483647; top:0; left:0;";
   const shadow = host.attachShadow({ mode: "open" });
 
+  // ---------------------------------------------------------------
+  // icon set — stroke icons, 1.6px, inherit currentColor (แทน emoji เดิม)
+  // ---------------------------------------------------------------
+  const svg = (p, w = 24) =>
+    `<svg viewBox="0 0 24 24" width="${w}" height="${w}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
+  const ICON = {
+    undo: svg('<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>'),
+    redo: svg('<path d="m15 14 5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/>'),
+    chevUp: svg('<path d="m6 14 6-6 6 6"/>'),
+    chevDown: svg('<path d="m6 10 6 6 6-6"/>'),
+    close: svg('<path d="M6 6 18 18M18 6 6 18"/>'),
+    edit: svg('<path d="M4 20h4L18.5 9.5a2.12 2.12 0 0 0-3-3L5 17z"/><path d="m13.5 6.5 3 3"/>'),
+    pointer: svg('<path d="m5 3 6 16 2-6 6-2z"/>'),
+    type: svg('<path d="M4 7V5h16v2"/><path d="M9 19h6"/><path d="M12 5v14"/>'),
+    up: svg('<path d="M12 19V5"/><path d="m6 11 6-6 6 6"/>'),
+    down: svg('<path d="M12 5v14"/><path d="m6 13 6 6 6-6"/>'),
+    copy: svg('<rect x="9" y="9" width="10" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/>'),
+    duplicate: svg('<rect x="4" y="4" width="16" height="16" rx="2"/><path d="M12 9v6M9 12h6"/>'),
+    hide: svg('<path d="M9.9 4.2A9 9 0 0 1 12 4c6 0 10 8 10 8a17 17 0 0 1-2.7 3.5"/><path d="M6.6 6.6A16.8 16.8 0 0 0 2 12s4 8 10 8a9 9 0 0 0 3.4-.7"/><path d="m3 3 18 18"/>'),
+    trash: svg('<path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="m6 7 1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/>'),
+    reset: svg('<path d="M4 4v6h6"/><path d="M4 10a8 8 0 1 0 2-4"/>'),
+    check: svg('<path d="m5 12 5 5L20 6"/>'),
+    folder: svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
+    left: svg('<path d="M19 12H5"/><path d="m11 6-6 6 6 6"/>'),
+    right: svg('<path d="M5 12h14"/><path d="m13 6 6 6-6 6"/>'),
+    alignL: svg('<path d="M4 6h16M4 12h10M4 18h13"/>'),
+    alignC: svg('<path d="M4 6h16M7 12h10M6 18h12"/>'),
+    alignR: svg('<path d="M4 6h16M10 12h10M7 18h13"/>'),
+    link: svg('<path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1"/><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1"/>'),
+    eye: svg('<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>'),
+    box: svg('<rect x="4" y="4" width="16" height="16" rx="2"/>'),
+    image: svg('<rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9.5" r="1.5"/><path d="m5 18 4.5-4.5 3 3L16 12l3 3"/>'),
+    button: svg('<rect x="3" y="8" width="18" height="8" rx="4"/><path d="M8 12h8"/>'),
+    window: svg('<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18"/>'),
+    paste: svg('<rect x="6" y="4" width="12" height="16" rx="2"/><path d="M9 4V3h6v1"/><path d="M9 4h6"/>'),
+    plus: svg('<path d="M12 5v14M5 12h14"/>'),
+    package: svg('<path d="M12 3 20 7.5v9L12 21l-8-4.5v-9z"/><path d="m4 7.5 8 4.5 8-4.5"/><path d="M12 12v9"/>'),
+    report: svg('<path d="M8 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2h-2"/><path d="M9 3h6v3H9z"/><path d="M8 12h8M8 16h5"/>'),
+    code: svg('<path d="m8 8-4 4 4 4"/><path d="m16 8 4 4-4 4"/><path d="m13 6-2 12"/>'),
+    braces: svg('<path d="M9 4H7a3 3 0 0 0-3 3v2a2 2 0 0 1-2 2 2 2 0 0 1 2 2v2a3 3 0 0 0 3 3h2"/><path d="M15 4h2a3 3 0 0 1 3 3v2a2 2 0 0 0 2 2 2 2 0 0 0-2 2v2a3 3 0 0 1-3 3h-2"/>'),
+    camera: svg('<path d="M3 8a2 2 0 0 1 2-2h2l1.5-2h7L19 6a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.5"/>'),
+    phone: svg('<rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 18h2"/>'),
+    laptop: svg('<rect x="4" y="5" width="16" height="11" rx="1.5"/><path d="M2 20h20"/>'),
+    import: svg('<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M4 21h16"/>'),
+    pin: svg('<path d="M12 17v5"/><path d="M9 3h6l-1 6 3 3H7l3-3z"/>'),
+    page: svg('<path d="M6 2h8l4 4v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/><path d="M14 2v4h4"/><path d="M9 13h6M9 17h4"/>'),
+    expand: svg('<path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M3 16v3a2 2 0 0 0 2 2h3"/>'),
+  };
+
   shadow.innerHTML = `
   <style>
     :host { all: initial; }
-    * { box-sizing: border-box; font-family: -apple-system, "Segoe UI", Roboto, "Noto Sans Thai", sans-serif; }
+    :host {
+      /* graphite drafting instrument — one redline signal */
+      --ink:#14161B; --ink-2:#1B1E25; --ink-3:#23272F; --ink-4:#2C313B;
+      --line:#333844; --line-2:#3E4450;
+      --paper:#EDEBE5; --paper-2:#BFC4CE; --paper-3:#949AA6;
+      --red:#FF5A3C; --red-2:#FF7256;
+      --red-soft:rgba(255,90,60,.14); --red-dim:rgba(255,90,60,.32);
+      --mono:"SF Mono", ui-monospace, "JetBrains Mono", "Cascadia Code", Menlo, monospace;
+      --sans:ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans Thai", sans-serif;
+    }
+    * { box-sizing: border-box; font-family: var(--sans); }
 
+    /* ── on-page instrument marks: redline ── */
     .hoverbox, .selectbox {
       position: fixed; pointer-events: none; display: none;
       z-index: 2147483646;
     }
-    .hoverbox { outline: 2px dashed #7c3aed; outline-offset: -1px; background: rgba(124,58,237,.08); }
-    .selectbox { outline: 2px solid #7c3aed; outline-offset: -1px; }
+    .hoverbox { outline: 1.5px dashed var(--red); outline-offset: -1px; background: var(--red-soft); }
+    .selectbox { outline: 1.5px solid var(--red); outline-offset: -1px; }
     .selectbox .rz {
-      position: absolute; pointer-events: auto; background: #7c3aed;
-      border: 1.5px solid #fff; border-radius: 50%; width: 11px; height: 11px;
-      box-shadow: 0 1px 4px rgba(0,0,0,.4);
+      position: absolute; pointer-events: auto; background: var(--ink);
+      border: 1.5px solid var(--red); border-radius: 1px; width: 9px; height: 9px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.5);
     }
-    .rz-e { right: -6px; top: 50%; margin-top: -6px; cursor: ew-resize; }
-    .rz-s { bottom: -6px; left: 50%; margin-left: -6px; cursor: ns-resize; }
-    .rz-se { right: -6px; bottom: -6px; cursor: nwse-resize; }
-    .crumbs { display: none; flex-wrap: wrap; gap: 3px; align-items: center; margin: -4px 0 10px; color: #6b5f97; font-size: 10px; }
+    .rz-e { right: -5px; top: 50%; margin-top: -5px; cursor: ew-resize; }
+    .rz-s { bottom: -5px; left: 50%; margin-left: -5px; cursor: ns-resize; }
+    .rz-se { right: -5px; bottom: -5px; cursor: nwse-resize; }
+    .crumbs { display: none; flex-wrap: wrap; gap: 3px; align-items: center; margin: 0 0 10px; color: var(--paper-3); font-size: 10px; }
     .crumbs.show { display: flex; }
     .crumbs button {
-      background: #2a1f4a; border: 1px solid #3b2d63; color: #b9aee0; border-radius: 5px;
-      padding: 2px 7px; font-size: 10.5px; cursor: pointer; font-family: ui-monospace, monospace;
+      background: var(--ink-3); border: 1px solid var(--line); color: var(--paper-2); border-radius: 4px;
+      padding: 2px 7px; font-size: 10.5px; cursor: pointer; font-family: var(--mono);
     }
-    .crumbs button:hover { background: #443574; color: #fff; }
-    .crumbs button.cur { background: #7c3aed; border-color: #7c3aed; color: #fff; }
+    .crumbs button:hover { background: var(--ink-4); color: var(--paper); }
+    .crumbs button.cur { background: var(--red-soft); border-color: var(--red-dim); color: var(--red-2); }
     .dropline {
       position: fixed; pointer-events: none; display: none;
-      background: #7c3aed; border-radius: 2px; z-index: 2147483646;
-      box-shadow: 0 0 8px rgba(124,58,237,.9);
+      background: var(--red); border-radius: 1px; z-index: 2147483646;
+      box-shadow: 0 0 6px rgba(255,90,60,.8);
     }
     .marquee {
       position: fixed; pointer-events: none; display: none;
-      border: 1.5px dashed #7c3aed; background: rgba(124,58,237,.12);
-      z-index: 2147483646; border-radius: 3px;
+      border: 1.5px dashed var(--red); background: var(--red-soft);
+      z-index: 2147483646; border-radius: 2px;
     }
     .mbox {
       position: fixed; pointer-events: none;
-      outline: 2px solid #7c3aed; outline-offset: -1px;
-      background: rgba(124,58,237,.07); z-index: 2147483645;
+      outline: 1.5px solid var(--red); outline-offset: -1px;
+      background: var(--red-soft); z-index: 2147483645;
     }
     .selectbox .tag {
-      position: absolute; top: -22px; left: 0; background: #7c3aed; color: #fff;
-      font-size: 11px; padding: 2px 8px; border-radius: 4px; white-space: nowrap;
+      position: absolute; top: -21px; left: -1px; background: var(--red); color: #fff;
+      font-size: 10.5px; font-family: var(--mono); padding: 2px 7px; border-radius: 3px 3px 3px 0; white-space: nowrap;
     }
 
+    /* ── panel ── */
     .panel {
-      position: fixed; top: 16px; right: 16px; width: 302px; max-height: calc(100vh - 32px);
-      background: #1c1530; color: #ece9f6; border-radius: 12px;
-      box-shadow: 0 12px 40px rgba(0,0,0,.45); display: flex; flex-direction: column;
-      font-size: 13px; overflow: hidden; border: 1px solid #3b2d63;
+      position: fixed; top: 16px; right: 16px; width: 306px; max-height: calc(100vh - 32px);
+      background: var(--ink); color: var(--paper); border-radius: 10px;
+      box-shadow: 0 1px 0 rgba(255,255,255,.03) inset, 0 18px 50px rgba(0,0,0,.55);
+      display: flex; flex-direction: column;
+      font-size: 13px; overflow: hidden; border: 1px solid var(--line-2);
     }
     .panel-header {
-      display: flex; align-items: center; gap: 8px; padding: 10px 12px;
-      background: #2a1f4a; cursor: grab; user-select: none;
+      display: flex; align-items: center; gap: 9px; padding: 11px 12px;
+      background: var(--ink-2); cursor: grab; user-select: none;
+      border-bottom: 1px solid var(--line);
     }
-    .panel-header .dot { width: 10px; height: 10px; border-radius: 50%; background: #a78bfa; }
-    .panel-header b { flex: 1; font-size: 13px; font-weight: 600; }
+    .panel-header .dot { width: 9px; height: 9px; border-radius: 2px; background: var(--red); box-shadow: 0 0 8px rgba(255,90,60,.6); flex: none; }
+    .panel-header b { flex: 1; font-size: 11.5px; font-weight: 600; font-family: var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--paper); }
     .panel-header button {
-      background: none; border: 0; color: #b9aee0; cursor: pointer; font-size: 15px; padding: 2px 6px;
+      background: none; border: 0; color: var(--paper-2); cursor: pointer; padding: 3px;
+      display: flex; align-items: center; justify-content: center; border-radius: 5px;
     }
-    .panel-header button:hover { color: #fff; }
-    .panel-body { overflow-y: auto; padding: 10px 12px 14px; }
+    .panel-header button svg { width: 16px; height: 16px; }
+    .panel-header button:hover { color: var(--paper); background: var(--ink-3); }
+    .panel-header button:disabled { opacity: .32; cursor: default; background: none; }
+    .panel-body { overflow-y: auto; padding: 12px; }
 
-    .hint { color: #9c8fd0; font-size: 11.5px; line-height: 1.6; margin-bottom: 10px; }
+    .hint { color: var(--paper-2); font-size: 12px; line-height: 1.7; margin-bottom: 11px; }
+    .hint b { color: var(--paper); font-weight: 600; }
+
+    /* ── signature: caliper readout ── */
+    .readout {
+      position: relative; background: var(--ink-2); border: 1px solid var(--line);
+      border-radius: 7px; padding: 9px 11px; margin-bottom: 11px;
+    }
+    .readout::before, .readout::after {
+      content: ""; position: absolute; width: 6px; height: 6px; border: 1px solid var(--red); pointer-events: none;
+    }
+    .readout::before { top: 4px; left: 4px; border-right: 0; border-bottom: 0; }
+    .readout::after { bottom: 4px; right: 4px; border-left: 0; border-top: 0; }
     .sel-info {
-      background: #2a1f4a; border-radius: 8px; padding: 8px 10px; margin-bottom: 10px;
-      font-family: ui-monospace, monospace; font-size: 11px; color: #c4b5fd; word-break: break-all;
+      font-family: var(--mono); font-size: 11px; color: var(--red-2); word-break: break-all; line-height: 1.5;
     }
-    .sel-info.empty { color: #7a6fa8; font-family: inherit; }
+    .sel-info.empty { color: var(--paper-3); font-family: var(--sans); font-size: 11.5px; }
+    .ro-dims {
+      display: none; margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--line);
+      font-family: var(--mono); font-size: 11px; color: var(--paper-2);
+      justify-content: space-between; gap: 10px;
+    }
+    .ro-dims.show { display: flex; }
+    .ro-dims b { color: var(--paper); font-weight: 600; }
 
-    h4 { margin: 12px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: #8d80c0; }
+    h4 { margin: 14px 0 7px; font-size: 10.5px; font-family: var(--mono); text-transform: uppercase; letter-spacing: .12em; color: var(--paper-2); }
+    h4::before { content: "— "; color: var(--red); }
     .row { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
-    .row label { flex: 1; color: #cfc7ec; font-size: 12.5px; }
+    .row label { flex: 1; color: var(--paper-2); font-size: 12.5px; }
     input[type="color"] {
-      width: 40px; height: 26px; border: 1px solid #4b3d78; border-radius: 6px;
-      background: #14102a; padding: 1px 2px; cursor: pointer;
+      width: 40px; height: 26px; border: 1px solid var(--line-2); border-radius: 5px;
+      background: var(--ink-3); padding: 1px 2px; cursor: pointer;
     }
     input[type="number"], input[type="text"] {
-      width: 88px; background: #14102a; border: 1px solid #4b3d78; color: #ece9f6;
-      border-radius: 6px; padding: 4px 7px; font-size: 12px; outline: none;
+      width: 88px; background: var(--ink-3); border: 1px solid var(--line-2); color: var(--paper);
+      border-radius: 5px; padding: 5px 8px; font-size: 12px; font-family: var(--mono); outline: none;
     }
     input[type="text"].wide { width: 100%; }
-    input:focus { border-color: #a78bfa; }
+    input:focus { border-color: var(--red); box-shadow: 0 0 0 2px var(--red-soft); }
 
     .btnrow { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
     button.act {
-      background: #362a5e; color: #e5defc; border: 1px solid #4b3d78; border-radius: 7px;
-      padding: 6px 10px; font-size: 12px; cursor: pointer; flex: 1 1 auto;
+      background: var(--ink-3); color: var(--paper); border: 1px solid var(--line-2); border-radius: 6px;
+      padding: 7px 11px; font-size: 12px; cursor: pointer; flex: 1 1 auto;
+      display: inline-flex; align-items: center; justify-content: center; gap: 6px;
     }
-    button.act:hover { background: #443574; }
-    button.act.primary { background: #7c3aed; border-color: #7c3aed; color: #fff; font-weight: 600; }
-    button.act.primary:hover { background: #8b5cf6; }
-    button.act.danger { color: #fda4af; }
-    button.act.danger:hover { background: #4c1d2e; }
+    button.act svg { width: 15px; height: 15px; flex: none; opacity: .85; }
+    button.act:hover { background: var(--ink-4); border-color: var(--line-2); }
+    button.act.primary { background: var(--paper); border-color: var(--paper); color: var(--ink); font-weight: 600; }
+    button.act.primary svg { opacity: 1; }
+    button.act.primary:hover { background: #fff; }
+    button.act.danger { color: var(--red-2); border-color: var(--red-dim); }
+    button.act.danger:hover { background: var(--red-soft); }
     button.act:disabled { opacity: .4; cursor: default; }
-    button.act.on { background: #7c3aed; border-color: #7c3aed; color: #fff; font-weight: 600; }
+    button.act.on { background: var(--red); border-color: var(--red); color: #fff; font-weight: 600; }
+    button.act.on svg { opacity: 1; }
 
-    .divider { height: 1px; background: #3b2d63; margin: 12px 0; }
+    .divider { height: 1px; background: var(--line); margin: 12px 0; }
     button.mini {
-      background: #362a5e; border: 1px solid #4b3d78; color: #e5defc;
-      border-radius: 6px; padding: 4px 9px; cursor: pointer; font-size: 12px;
+      background: var(--ink-3); border: 1px solid var(--line-2); color: var(--paper);
+      border-radius: 5px; padding: 5px 9px; cursor: pointer; font-size: 12px;
+      display: inline-flex; align-items: center; justify-content: center;
     }
-    button.mini:hover { background: #443574; }
-    button.mini.on { background: #7c3aed; border-color: #7c3aed; color: #fff; }
+    button.mini svg { width: 15px; height: 15px; }
+    button.mini:hover { background: var(--ink-4); }
+    button.mini.on { background: var(--red); border-color: var(--red); color: #fff; }
     select {
-      background: #14102a; border: 1px solid #4b3d78; color: #ece9f6;
-      border-radius: 6px; padding: 4px 6px; font-size: 12px; width: 96px; outline: none;
+      background: var(--ink-3); border: 1px solid var(--line-2); color: var(--paper);
+      border-radius: 5px; padding: 5px 6px; font-size: 12px; width: 96px; outline: none;
     }
-    input[type="range"] { width: 96px; accent-color: #7c3aed; }
+    select:focus { border-color: var(--red); }
+    input[type="range"] { width: 96px; accent-color: var(--red); }
     .marginrow { gap: 5px; }
-    .marginrow input { width: 25%; min-width: 0; flex: 1; }
+    .marginrow input { width: 25%; min-width: 0; flex: 1; text-align: center; }
     textarea {
-      width: 100%; background: #14102a; border: 1px solid #4b3d78; color: #ece9f6;
-      border-radius: 6px; padding: 6px 8px; font-size: 11.5px; outline: none; resize: vertical;
-      font-family: ui-monospace, monospace; line-height: 1.5;
+      width: 100%; background: var(--ink-3); border: 1px solid var(--line-2); color: var(--paper);
+      border-radius: 5px; padding: 7px 9px; font-size: 11.5px; outline: none; resize: vertical;
+      font-family: var(--mono); line-height: 1.55;
     }
-    textarea:focus { border-color: #a78bfa; }
+    textarea:focus { border-color: var(--red); box-shadow: 0 0 0 2px var(--red-soft); }
     .imgrow { display: none; }
     .imgrow.show { display: block; }
     .filelabel {
-      display: block; text-align: center; background: #362a5e; border: 1px dashed #5b4a8f;
-      border-radius: 7px; padding: 6px; font-size: 12px; cursor: pointer; margin-top: 6px; color: #cfc7ec;
+      display: flex; align-items: center; justify-content: center; gap: 7px; text-align: center;
+      background: var(--ink-3); border: 1px dashed var(--line-2);
+      border-radius: 6px; padding: 8px; font-size: 12px; cursor: pointer; margin-top: 6px; color: var(--paper-2);
     }
-    .filelabel:hover { background: #443574; }
+    .filelabel svg { width: 15px; height: 15px; }
+    .filelabel:hover { background: var(--ink-4); border-color: var(--red-dim); color: var(--paper); }
     input[type="file"] { display: none; }
 
     .changelist { max-height: 140px; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
-    .chg { display: flex; align-items: center; gap: 6px; background: #2a1f4a; border-radius: 6px; padding: 4px 7px; font-size: 11px; }
+    .chg { display: flex; align-items: center; gap: 6px; background: var(--ink-2); border: 1px solid var(--line); border-radius: 5px; padding: 5px 8px; font-size: 11px; }
     .chg .lbl {
-      flex: 1; font-family: ui-monospace, monospace; color: #c4b5fd;
+      flex: 1; font-family: var(--mono); color: var(--paper);
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer;
     }
-    .chg .lbl:hover { color: #fff; text-decoration: underline; }
-    .chg .kinds { color: #8d80c0; font-size: 10px; white-space: nowrap; }
-    .chg button { background: none; border: 0; cursor: pointer; font-size: 11px; padding: 1px 3px; }
+    .chg .lbl:hover { color: var(--red-2); }
+    .chg .kinds { color: var(--paper-3); font-size: 10px; white-space: nowrap; font-family: var(--mono); }
+    .chg button { background: none; border: 0; cursor: pointer; color: var(--paper-2); display: flex; padding: 1px; }
+    .chg button:hover { color: var(--red-2); }
+    .chg button svg { width: 14px; height: 14px; }
     .restorebar {
-      background: #2a1f4a; border: 1px solid #7c3aed; border-radius: 8px;
-      padding: 8px 10px; margin-bottom: 10px; font-size: 12px; display: none;
-      flex-direction: column; gap: 8px;
+      background: var(--red-soft); border: 1px solid var(--red-dim); border-radius: 7px;
+      padding: 9px 11px; margin-bottom: 11px; font-size: 12px; display: none;
+      flex-direction: column; gap: 8px; color: var(--paper);
     }
     .restorebar.show { display: flex; }
+    .newpagebar {
+      display: none; flex-direction: column; gap: 8px;
+      background: var(--red-soft); border: 1px solid var(--red); border-radius: 7px;
+      padding: 9px 11px; margin-bottom: 11px;
+    }
+    .newpagebar.show { display: flex; }
+    .npb-head { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: var(--paper); }
+    .npb-dot { width: 8px; height: 8px; border-radius: 2px; background: var(--red); box-shadow: 0 0 8px rgba(255,90,60,.7); flex: none; animation: npb-pulse 1.6s ease-in-out infinite; }
+    @keyframes npb-pulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+    .npb-sub { font-size: 11px; color: var(--paper-2); }
+    .npb-label { font-size: 10px; font-family: var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--paper-3); margin-top: 2px; }
+    .newpagebar .np-size { padding: 6px 4px; }
     .toast {
       position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%) translateY(20px);
-      background: #1c1530; color: #ece9f6; border: 1px solid #7c3aed; border-radius: 10px;
-      padding: 10px 18px; font-size: 13px; opacity: 0; transition: all .25s; pointer-events: none;
-      box-shadow: 0 8px 30px rgba(0,0,0,.4);
+      background: var(--ink-2); color: var(--paper); border: 1px solid var(--line-2);
+      border-left: 3px solid var(--red); border-radius: 8px;
+      padding: 11px 18px; font-size: 12.5px; opacity: 0; transition: all .22s; pointer-events: none;
+      box-shadow: 0 12px 34px rgba(0,0,0,.5); max-width: 78vw;
     }
     .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-    .counter { font-size: 11px; color: #8d80c0; text-align: center; margin-top: 8px; }
+    .counter { font-size: 10px; font-family: var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--paper-3); text-align: center; margin-top: 12px; }
 
-    /* ── โครงใหม่: modebar + tabs + pane ── */
+    /* ── modebar + tabs + pane ── */
     .panel.min .panel-main { display: none; }
     .panel-main { display: flex; flex-direction: column; min-height: 0; }
-    .modebar { display: flex; gap: 6px; padding: 10px 12px 0; }
-    .modebar .act { flex: 1; }
-    .tabs { display: flex; gap: 2px; margin-top: 8px; padding: 0 8px; border-bottom: 1px solid #3b2d63; }
+    .modebar { display: flex; gap: 0; margin: 12px 12px 0; border: 1px solid var(--line-2); border-radius: 7px; overflow: hidden; }
+    .modebar .act { flex: 1; border: 0; border-radius: 0; background: transparent; color: var(--paper-2); }
+    .modebar .act + .act { border-left: 1px solid var(--line-2); }
+    .modebar .act:hover { background: var(--ink-3); }
+    .modebar .act.on { background: var(--red); color: #fff; }
+    .tabs { display: flex; gap: 0; margin-top: 12px; padding: 0 12px; border-bottom: 1px solid var(--line); }
     .tab {
-      flex: 1; background: none; border: 0; border-bottom: 2px solid transparent;
-      color: #9c8fd0; padding: 8px 0 7px; font-size: 12px; cursor: pointer; position: relative;
-      font-family: inherit;
+      flex: 1; background: none; border: 0; border-bottom: 1.5px solid transparent;
+      color: var(--paper-3); padding: 9px 0 8px; font-size: 12px; cursor: pointer; position: relative;
+      font-family: var(--sans); margin-bottom: -1px;
     }
-    .tab:hover { color: #e5defc; }
-    .tab.on { color: #fff; border-bottom-color: #a78bfa; font-weight: 600; }
+    .tab:hover { color: var(--paper-2); }
+    .tab.on { color: var(--paper); border-bottom-color: var(--red); font-weight: 600; }
     .tab .badge {
-      position: absolute; top: 1px; right: 4px; background: #7c3aed; color: #fff;
+      position: absolute; top: 2px; right: 2px; background: var(--red); color: #fff;
       font-size: 9px; min-width: 14px; height: 14px; line-height: 14px;
-      border-radius: 7px; padding: 0 3px; display: none; font-weight: 600;
+      border-radius: 7px; padding: 0 3px; display: none; font-weight: 600; font-family: var(--mono);
     }
     .tab .badge.show { display: inline-block; }
     .tabpane { display: none; }
     .tabpane.on { display: block; }
 
-    /* ปุ่มจัดการแบบ icon grid */
-    .qa { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 10px; }
+    /* icon grid */
+    .qa { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-bottom: 11px; }
     .qa.qa3 { grid-template-columns: repeat(3, 1fr); }
     .qa button {
-      background: #362a5e; border: 1px solid #4b3d78; color: #e5defc; border-radius: 8px;
-      padding: 7px 2px 5px; cursor: pointer; display: flex; flex-direction: column;
-      align-items: center; gap: 3px; font-family: inherit;
+      background: var(--ink-3); border: 1px solid var(--line-2); color: var(--paper); border-radius: 7px;
+      padding: 9px 2px 6px; cursor: pointer; display: flex; flex-direction: column;
+      align-items: center; gap: 5px; font-family: var(--sans);
     }
-    .qa button span { font-size: 15px; line-height: 1; }
-    .qa button small { font-size: 9.5px; color: #b9aee0; line-height: 1; }
-    .qa button:hover { background: #443574; }
-    .qa button.danger small { color: #fda4af; }
-    .qa button.danger:hover { background: #4c1d2e; }
+    .qa button span { display: flex; color: var(--paper-2); }
+    .qa button span svg { width: 18px; height: 18px; }
+    .qa button small { font-size: 11px; color: var(--paper); line-height: 1.1; }
+    .qa button:hover { background: var(--ink-4); border-color: var(--red-dim); }
+    .qa button:hover span { color: var(--red-2); }
+    .qa button.danger span { color: var(--red-2); }
+    .qa button.danger small { color: var(--red-2); }
+    .qa button.danger:hover { background: var(--red-soft); }
 
-    /* หมวดพับได้ใน inspector */
-    details.sec { border: 1px solid #3b2d63; border-radius: 8px; margin-bottom: 8px; background: #221941; }
+    /* พับได้ */
+    details.sec { border: 1px solid var(--line); border-radius: 7px; margin-bottom: 8px; background: var(--ink-2); }
     details.sec summary {
-      list-style: none; cursor: pointer; padding: 8px 10px; font-size: 12px; font-weight: 600;
-      color: #cfc7ec; display: flex; align-items: center; gap: 7px; user-select: none;
+      list-style: none; cursor: pointer; padding: 9px 11px; font-size: 12px; font-weight: 600;
+      color: var(--paper); display: flex; align-items: center; gap: 8px; user-select: none;
     }
     details.sec summary::-webkit-details-marker { display: none; }
-    details.sec summary::before { content: "▸"; color: #8d80c0; font-size: 10px; transition: transform .15s; }
-    details.sec[open] summary::before { transform: rotate(90deg); }
-    details.sec .secbody { padding: 2px 10px 8px; }
+    details.sec summary::before { content: ""; width: 6px; height: 6px; border-right: 1.5px solid var(--red); border-bottom: 1.5px solid var(--red); transform: rotate(-45deg); transition: transform .15s; flex: none; }
+    details.sec[open] summary::before { transform: rotate(45deg); }
+    details.sec .secbody { padding: 2px 11px 10px; }
     .changelist.tall { max-height: 340px; }
+
+    button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, summary:focus-visible {
+      outline: 2px solid var(--red); outline-offset: 2px;
+    }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
   </style>
 
   <div class="hoverbox"></div>
@@ -396,16 +525,16 @@
 
   <div class="panel">
     <div class="panel-header" id="dragbar">
-      <span class="dot"></span><b>Relayout Editor</b>
-      <button id="btn-undo" title="Undo (⌘Z)" disabled>↩︎</button>
-      <button id="btn-redo" title="Redo (⇧⌘Z)" disabled>↪︎</button>
-      <button id="btn-min" title="ย่อ/ขยาย panel">▁</button>
-      <button id="btn-close" title="ปิด">✕</button>
+      <span class="dot"></span><b>Relayout</b>
+      <button id="btn-undo" title="Undo (⌘Z)" disabled>${ICON.undo}</button>
+      <button id="btn-redo" title="Redo (⇧⌘Z)" disabled>${ICON.redo}</button>
+      <button id="btn-min" title="ย่อ/ขยาย panel">${ICON.chevUp}</button>
+      <button id="btn-close" title="ปิด">${ICON.close}</button>
     </div>
     <div class="panel-main">
       <div class="modebar">
-        <button class="act on" id="mode-edit">✏️ โหมดแก้ไข</button>
-        <button class="act" id="mode-action">🖱 โหมดใช้งาน</button>
+        <button class="act on" id="mode-edit">${ICON.edit} โหมดแก้ไข</button>
+        <button class="act" id="mode-action">${ICON.pointer} โหมดใช้งาน</button>
       </div>
       <div class="tabs">
         <button class="tab on" data-tab="edit">แก้ไข</button>
@@ -417,14 +546,36 @@
         <div class="restorebar" id="restorebar">
           <span id="restore-info"></span>
           <div class="btnrow">
-            <button class="act primary" id="btn-restore">↻ กู้คืน</button>
+            <button class="act primary" id="btn-restore">${ICON.reset} กู้คืน</button>
             <button class="act danger" id="btn-discard">ทิ้ง</button>
+          </div>
+        </div>
+
+        <div class="newpagebar" id="newpagebar">
+          <div class="npb-head"><span class="npb-dot"></span> กำลังออกแบบหน้าใหม่</div>
+          <div class="npb-sub">เนื้อหาเดิมของเว็บถูกซ่อนไว้ชั่วคราว · ใช้แท็บ "เพิ่ม" วาง element</div>
+          <div class="npb-label">ขนาดหน้า</div>
+          <div class="btnrow">
+            <button class="act np-size" data-w="390px">${ICON.phone} 390</button>
+            <button class="act np-size" data-w="768px">${ICON.phone} 768</button>
+            <button class="act np-size on" data-w="1280px">${ICON.laptop} 1280</button>
+            <button class="act np-size" data-w="100%">${ICON.expand} เต็ม</button>
+          </div>
+          <div class="btnrow" style="margin-top:2px">
+            <button class="act primary" id="btn-np-bind">${ICON.link} บันทึก + ผูกปุ่ม</button>
+          </div>
+          <div class="btnrow" style="margin-top:2px">
+            <button class="act" id="btn-np-export">${ICON.code} Export ไฟล์</button>
+            <button class="act" id="btn-np-exit">${ICON.close} ออก</button>
           </div>
         </div>
 
         <!-- ── แท็บ: แก้ไข ── -->
         <div class="tabpane on" data-pane="edit">
-          <div class="sel-info empty" id="sel-info">ยังไม่ได้เลือก element</div>
+          <div class="readout">
+            <div class="sel-info empty" id="sel-info">ยังไม่ได้เลือก element</div>
+            <div class="ro-dims" id="sel-dims"></div>
+          </div>
           <div class="crumbs" id="crumbs"></div>
           <div class="hint" id="edit-hint">
             <b>คลิก</b> element บนหน้าเว็บเพื่อเริ่มแก้ไข<br>
@@ -436,24 +587,24 @@
           <div id="group-tools" style="display:none">
             <div class="hint" id="group-info"></div>
             <div class="btnrow">
-              <button class="act danger" id="btn-group-hide">🙈 ซ่อนทั้งกลุ่ม</button>
-              <button class="act danger" id="btn-group-delete">🗑 ลบทั้งกลุ่ม</button>
+              <button class="act danger" id="btn-group-hide">${ICON.hide} ซ่อนทั้งกลุ่ม</button>
+              <button class="act danger" id="btn-group-delete">${ICON.trash} ลบทั้งกลุ่ม</button>
             </div>
             <div class="btnrow">
-              <button class="act" id="btn-group-clear">✕ ยกเลิกเลือกกลุ่ม (Esc)</button>
+              <button class="act" id="btn-group-clear">${ICON.close} ยกเลิกเลือกกลุ่ม (Esc)</button>
             </div>
           </div>
 
           <div id="inspector" style="display:none">
             <div class="qa">
-              <button id="btn-text" title="แก้ข้อความ (หรือดับเบิลคลิกที่ element)"><span>✏️</span><small>ข้อความ</small></button>
-              <button id="btn-up" title="ย้ายลำดับขึ้น"><span>⬆︎</span><small>ขึ้น</small></button>
-              <button id="btn-down" title="ย้ายลำดับลง"><span>⬇︎</span><small>ลง</small></button>
-              <button id="btn-copy" title="คัดลอก (⌘C)"><span>📄</span><small>คัดลอก</small></button>
-              <button id="btn-duplicate" title="ทำซ้ำต่อท้ายทันที"><span>⧉</span><small>ทำซ้ำ</small></button>
-              <button id="btn-hide" class="danger" title="ซ่อน (Delete)"><span>🙈</span><small>ซ่อน</small></button>
-              <button id="btn-delete" class="danger" title="ลบจริง (Shift+Delete)"><span>🗑</span><small>ลบ</small></button>
-              <button id="btn-reset" title="รีเซ็ต element นี้กลับค่าเดิม"><span>♻️</span><small>รีเซ็ต</small></button>
+              <button id="btn-text" title="แก้ข้อความ (หรือดับเบิลคลิกที่ element)"><span>${ICON.type}</span><small>ข้อความ</small></button>
+              <button id="btn-up" title="ย้ายลำดับขึ้น"><span>${ICON.up}</span><small>ขึ้น</small></button>
+              <button id="btn-down" title="ย้ายลำดับลง"><span>${ICON.down}</span><small>ลง</small></button>
+              <button id="btn-copy" title="คัดลอก (⌘C)"><span>${ICON.copy}</span><small>คัดลอก</small></button>
+              <button id="btn-duplicate" title="ทำซ้ำต่อท้ายทันที"><span>${ICON.duplicate}</span><small>ทำซ้ำ</small></button>
+              <button id="btn-hide" class="danger" title="ซ่อน (Delete)"><span>${ICON.hide}</span><small>ซ่อน</small></button>
+              <button id="btn-delete" class="danger" title="ลบจริง (Shift+Delete)"><span>${ICON.trash}</span><small>ลบ</small></button>
+              <button id="btn-reset" title="รีเซ็ต element นี้กลับค่าเดิม"><span>${ICON.reset}</span><small>รีเซ็ต</small></button>
             </div>
 
             <div class="imgrow" id="img-tools">
@@ -461,19 +612,19 @@
                 <summary>รูปภาพ</summary>
                 <div class="secbody">
                   <input type="text" class="wide" id="in-imgurl" placeholder="วาง URL รูปใหม่ แล้วกด Enter">
-                  <label class="filelabel">📁 เลือกรูปจากเครื่อง<input type="file" id="in-imgfile" accept="image/*"></label>
+                  <label class="filelabel">${ICON.folder} เลือกรูปจากเครื่อง<input type="file" id="in-imgfile" accept="image/*"></label>
                 </div>
               </details>
             </div>
 
             <div class="imgrow" id="modal-tools">
               <details class="sec" open>
-                <summary>Modal นี้</summary>
+                <summary>Modal / หน้านี้</summary>
                 <div class="secbody">
                   <div class="btnrow">
-                    <button class="act" id="btn-modal-hide">🙈 ซ่อน modal (สถานะเริ่มต้นของหน้า)</button>
+                    <button class="act" id="btn-modal-hide">${ICON.hide} ซ่อน (เก็บเป็นสถานะเริ่มต้นของหน้า)</button>
                   </div>
-                  <div class="hint">แก้ข้อความ/สีได้เหมือน element ทั่วไป · ซ่อนแล้วไปเลือกปุ่มที่จะผูกในหมวด "ผูก Modal"</div>
+                  <div class="hint">แก้ข้อความ/สีได้เหมือน element ทั่วไป · ซ่อนแล้วคลิกปุ่มที่ผูกไว้ใน "โหมดใช้งาน" เพื่อเปิด</div>
                 </div>
               </details>
             </div>
@@ -483,8 +634,8 @@
                 <summary>คอลัมน์ตาราง</summary>
                 <div class="secbody">
                   <div class="btnrow">
-                    <button class="act" id="btn-col-left">⬅ ย้ายซ้าย</button>
-                    <button class="act" id="btn-col-right">➡ ย้ายขวา</button>
+                    <button class="act" id="btn-col-left">${ICON.left} ย้ายซ้าย</button>
+                    <button class="act" id="btn-col-right">${ICON.right} ย้ายขวา</button>
                   </div>
                 </div>
               </details>
@@ -498,10 +649,10 @@
                 <div class="row"><label>ขนาดฟอนต์ (px)</label><input type="number" id="in-fontsize" min="6" max="200"></div>
                 <div class="row">
                   <label>ตัวหนา / จัดชิด</label>
-                  <button class="mini" id="in-bold"><b>B</b></button>
-                  <button class="mini" id="in-al" title="ชิดซ้าย">⯇</button>
-                  <button class="mini" id="in-ac" title="กึ่งกลาง">≡</button>
-                  <button class="mini" id="in-ar" title="ชิดขวา">⯈</button>
+                  <button class="mini" id="in-bold" title="ตัวหนา"><b>B</b></button>
+                  <button class="mini" id="in-al" title="ชิดซ้าย">${ICON.alignL}</button>
+                  <button class="mini" id="in-ac" title="กึ่งกลาง">${ICON.alignC}</button>
+                  <button class="mini" id="in-ar" title="ชิดขวา">${ICON.alignR}</button>
                 </div>
               </div>
             </details>
@@ -561,24 +712,28 @@
               <div class="secbody">
                 <textarea id="in-css" rows="4" spellcheck="false" placeholder="พิมพ์ CSS ตรง ๆ เช่น&#10;background: #1e293b;&#10;transform: rotate(2deg);"></textarea>
                 <div class="btnrow" style="margin-top:6px">
-                  <button class="act primary" id="btn-apply-css">✨ ใช้ CSS นี้</button>
+                  <button class="act primary" id="btn-apply-css">${ICON.check} ใช้ CSS นี้</button>
                 </div>
               </div>
             </details>
 
             <details class="sec" id="bind-tools">
-              <summary>ผูก Modal (คลิกแล้วเปิด)</summary>
+              <summary>ผูก Modal / หน้า (คลิกแล้วเปิด)</summary>
               <div class="secbody">
-                <div class="hint" id="bind-none">ยังไม่มี modal ในหน้า — เพิ่มได้ที่แท็บ "เพิ่ม" (ปุ่ม 🪟 Modal)</div>
+                <div class="btnrow">
+                  <button class="act" id="btn-create-modal-bind" title="สร้าง modal ใหม่ แล้วผูกกับ element ที่เลือกอยู่ทันที">${ICON.window} สร้าง Modal + ผูก</button>
+                  <button class="act" id="btn-create-page-bind" title="สร้างหน้าซ้อนเต็มจอใหม่ แล้วผูกกับ element ที่เลือกอยู่ทันที">${ICON.page} สร้างหน้า + ผูก</button>
+                </div>
+                <div class="hint" id="bind-none">ยังไม่มี modal/หน้าซ้อนให้เลือก — กดปุ่มด้านบนเพื่อสร้างแล้วผูกทันที หรือเพิ่มจากแท็บ "เพิ่ม"</div>
                 <div id="bind-row">
                   <div class="row">
-                    <label>เลือก modal</label>
+                    <label>เลือกปลายทาง</label>
                     <select id="in-modal-sel"></select>
-                    <button class="mini" id="btn-modal-open" title="เปิด modal นี้ขึ้นมาดู/แก้">👁</button>
+                    <button class="mini" id="btn-modal-open" title="เปิด modal นี้ขึ้นมาดู/แก้">${ICON.eye}</button>
                   </div>
                   <div class="btnrow">
-                    <button class="act primary" id="btn-bind-modal">🔗 ผูกกับ element นี้</button>
-                    <button class="act danger" id="btn-unbind-modal" style="display:none">✕ ยกเลิกผูก</button>
+                    <button class="act primary" id="btn-bind-modal">${ICON.link} ผูกกับ element นี้</button>
+                    <button class="act danger" id="btn-unbind-modal" style="display:none">${ICON.close} ยกเลิกผูก</button>
                   </div>
                   <div class="hint">ผูกแล้วไปลองคลิกใน "โหมดใช้งาน" ได้เลย · HTML ที่ export ไปก็คลิกเปิดได้จริง</div>
                 </div>
@@ -589,28 +744,35 @@
 
         <!-- ── แท็บ: เพิ่ม ── -->
         <div class="tabpane" data-pane="add">
+          <h4 style="margin-top:2px">หน้าใหม่</h4>
+          <div class="btnrow">
+            <button class="act" id="btn-newpage">${ICON.page} หน้าเปล่า</button>
+            <button class="act" id="btn-newpage-base">${ICON.copy} ก็อปหน้าเดิม</button>
+          </div>
+          <div class="hint" id="newpage-hint">เลือก “หน้าเปล่า” เริ่มจากศูนย์ หรือ “ก็อปหน้าเดิม” เอาหน้านี้มาเป็นฐานแล้วแก้ต่อ · หน้าเดิมจะถูกซ่อนไว้ · Export เป็นไฟล์ HTML ได้</div>
+          <div class="divider"></div>
           <div class="hint">วางต่อจาก element ที่เลือกอยู่ · ไม่ได้เลือก = ต่อท้ายหน้า<br>เส้นประของกล่อง/section ใหม่เป็นแค่ไกด์ตอนแก้ — โหมดใช้งาน/ส่งออก/screenshot จะไม่มี</div>
           <h4>Element</h4>
           <div class="qa qa3">
-            <button id="btn-add-box" title="กล่องเปล่า ลาก element อื่นยัดเข้าไปได้"><span>🔲</span><small>กล่อง</small></button>
-            <button id="btn-add-img" title="รูป placeholder เลือกแล้วเปลี่ยน URL/ไฟล์"><span>🖼️</span><small>รูปภาพ</small></button>
-            <button id="btn-add-btn" title="ปุ่มใหม่"><span>🔘</span><small>ปุ่ม</small></button>
-            <button id="btn-add-head" title="หัวข้อใหม่"><span>𝗛</span><small>หัวข้อ</small></button>
-            <button id="btn-add-text" title="ย่อหน้าข้อความ"><span>¶</span><small>ข้อความ</small></button>
-            <button id="btn-add-modal" title="กล่อง modal ลอยกลางจอ — ผูกกับปุ่มให้คลิกเปิดได้"><span>🪟</span><small>Modal</small></button>
-            <button id="btn-paste" title="วาง element ที่คัดลอกไว้ (⌘V)"><span>📋</span><small>วาง ⌘V</small></button>
+            <button id="btn-add-box" title="กล่องเปล่า ลาก element อื่นยัดเข้าไปได้"><span>${ICON.box}</span><small>กล่อง</small></button>
+            <button id="btn-add-img" title="รูป placeholder เลือกแล้วเปลี่ยน URL/ไฟล์"><span>${ICON.image}</span><small>รูปภาพ</small></button>
+            <button id="btn-add-btn" title="ปุ่มใหม่"><span>${ICON.button}</span><small>ปุ่ม</small></button>
+            <button id="btn-add-head" title="หัวข้อใหม่"><span><b style="font-family:var(--mono);font-size:15px">H</b></span><small>หัวข้อ</small></button>
+            <button id="btn-add-text" title="ย่อหน้าข้อความ"><span><b style="font-family:var(--mono);font-size:15px">¶</b></span><small>ข้อความ</small></button>
+            <button id="btn-add-modal" title="กล่อง modal ลอยกลางจอ — ผูกกับปุ่มให้คลิกเปิดได้"><span>${ICON.window}</span><small>Modal</small></button>
+            <button id="btn-paste" title="วาง element ที่คัดลอกไว้ (⌘V)"><span>${ICON.paste}</span><small>วาง ⌘V</small></button>
           </div>
           <h4>Section</h4>
           <div class="btnrow">
-            <button class="act" id="btn-add-before">➕ ก่อนที่เลือก</button>
-            <button class="act" id="btn-add-after">➕ หลังที่เลือก</button>
+            <button class="act" id="btn-add-before">${ICON.plus} ก่อนที่เลือก</button>
+            <button class="act" id="btn-add-after">${ICON.plus} หลังที่เลือก</button>
           </div>
           <div class="btnrow">
-            <button class="act" id="btn-add-end">➕ ต่อท้ายหน้า</button>
+            <button class="act" id="btn-add-end">${ICON.plus} ต่อท้ายหน้า</button>
           </div>
           <h4>คลัง Asset (ใช้ข้ามหน้าได้)</h4>
           <div class="btnrow">
-            <button class="act" id="btn-asset-save">📦 เก็บ element ที่เลือกเข้าคลัง</button>
+            <button class="act" id="btn-asset-save">${ICON.package} เก็บ element ที่เลือกเข้าคลัง</button>
           </div>
           <div class="changelist" id="assetlist"><div class="hint">คลังยังว่าง</div></div>
         </div>
@@ -620,7 +782,7 @@
           <h4 style="margin-top:2px">รายการแก้ไข</h4>
           <div class="changelist tall" id="changelist"><div class="hint">ยังไม่มีการแก้ไข</div></div>
           <div class="btnrow" style="margin-top:10px">
-            <button class="act danger" id="btn-reset-all">♻️ รีเซ็ตทั้งหน้า</button>
+            <button class="act danger" id="btn-reset-all">${ICON.reset} รีเซ็ตทั้งหน้า</button>
           </div>
         </div>
 
@@ -628,27 +790,27 @@
         <div class="tabpane" data-pane="export">
           <h4 style="margin-top:2px">รายงานส่งให้ Dev</h4>
           <div class="btnrow">
-            <button class="act primary" id="btn-export-json">📋 รายงาน JSON</button>
+            <button class="act primary" id="btn-export-json">${ICON.report} รายงาน JSON</button>
           </div>
           <div class="btnrow">
-            <button class="act" id="btn-export-css">🎨 CSS</button>
-            <button class="act" id="btn-export-html">🧾 HTML</button>
+            <button class="act" id="btn-export-css">${ICON.braces} CSS</button>
+            <button class="act" id="btn-export-html">${ICON.code} HTML</button>
           </div>
           <h4>Screenshot</h4>
           <div class="btnrow">
-            <button class="act" id="btn-export-shot">📸 จอ</button>
-            <button class="act" id="btn-export-shot-el">📸 ที่เลือก</button>
-            <button class="act" id="btn-export-shot-full">📸 ทั้งหน้า</button>
+            <button class="act" id="btn-export-shot">${ICON.camera} จอ</button>
+            <button class="act" id="btn-export-shot-el">${ICON.camera} ที่เลือก</button>
+            <button class="act" id="btn-export-shot-full">${ICON.camera} ทั้งหน้า</button>
           </div>
           <h4>ขนาดจอ (ทดสอบ Responsive)</h4>
           <div class="btnrow">
-            <button class="act" id="btn-vp-390">📱 390</button>
-            <button class="act" id="btn-vp-768">📱 768</button>
-            <button class="act" id="btn-vp-1280">💻 1280</button>
-            <button class="act" id="btn-vp-restore">↩︎ คืน</button>
+            <button class="act" id="btn-vp-390">${ICON.phone} 390</button>
+            <button class="act" id="btn-vp-768">${ICON.phone} 768</button>
+            <button class="act" id="btn-vp-1280">${ICON.laptop} 1280</button>
+            <button class="act" id="btn-vp-restore">${ICON.reset} คืน</button>
           </div>
           <h4>Import</h4>
-          <label class="filelabel">📥 Import รายงาน JSON กลับมาแก้ต่อ<input type="file" id="in-import" accept=".json,application/json"></label>
+          <label class="filelabel">${ICON.import} Import รายงาน JSON กลับมาแก้ต่อ<input type="file" id="in-import" accept=".json,application/json"></label>
         </div>
 
         <div class="counter" id="counter">ยังไม่มีการแก้ไข</div>
@@ -669,6 +831,7 @@
     seltag: $(".selectbox .tag"),
     panel: $(".panel"),
     selinfo: $("#sel-info"),
+    seldims: $("#sel-dims"),
     inspector: $("#inspector"),
     imgtools: $("#img-tools"),
     toast: $(".toast"),
@@ -688,9 +851,28 @@
     box.style.height = r.height + "px";
   }
   function refreshBoxes() {
+    // โหมดใช้งาน = ไม่มี mark ของโหมดแก้ไขบนหน้า (selection ยังจำไว้ กลับมาโหมดแก้ไขค่อยโชว์)
+    if (state.mode === "action") {
+      ui.selectbox.style.display = "none";
+      ui.multiboxes.innerHTML = "";
+      return;
+    }
     placeBox(ui.selectbox, state.selected);
-    if (state.selected) ui.seltag.textContent = shortLabel(state.selected);
+    if (state.selected) {
+      ui.seltag.textContent = shortLabel(state.selected);
+      updateReadout(state.selected);
+    }
     if (state.multi.length > 1) drawMultiBoxes();
+  }
+
+  // caliper readout — dimensions ของ element ที่เลือก (สด ตามหน้าจอจริง)
+  function updateReadout(el) {
+    if (!el || !el.isConnected) { ui.seldims.classList.remove("show"); return; }
+    const r = el.getBoundingClientRect();
+    ui.seldims.innerHTML =
+      `<span><b>${Math.round(r.width)}</b> × <b>${Math.round(r.height)}</b> px</span>` +
+      `<span>@ ${Math.round(r.left)}, ${Math.round(r.top)}</span>`;
+    ui.seldims.classList.add("show");
   }
 
   // ---------------------------------------------------------------
@@ -718,6 +900,7 @@
     } else {
       ui.selinfo.classList.add("empty");
       ui.selinfo.textContent = "ยังไม่ได้เลือก element";
+      ui.seldims.classList.remove("show");
       ui.inspector.style.display = "none";
       if (hint) hint.style.display = "block";
     }
@@ -872,7 +1055,8 @@
       const o = document.createElement("option");
       o.value = m.getAttribute("data-rl-modal");
       const h = m.querySelector("h1,h2,h3,h4");
-      o.textContent = h && h.textContent.trim() ? h.textContent.trim().slice(0, 26) : o.value;
+      const name = h && h.textContent.trim() ? h.textContent.trim().slice(0, 24) : m.getAttribute("data-rl-modal");
+      o.textContent = (m.hasAttribute("data-rl-page") ? "หน้า · " : "modal · ") + name;
       msel.appendChild(o);
     }
     $("#bind-none").style.display = modals.length ? "none" : "";
@@ -914,13 +1098,13 @@
     el._rlTextBefore = el.innerHTML;
     el.setAttribute("contenteditable", "plaintext-only");
     el.focus();
-    $("#btn-text").innerHTML = "<span>✅</span><small>เสร็จสิ้น</small>";
+    $("#btn-text").innerHTML = `<span>${ICON.check}</span><small>เสร็จสิ้น</small>`;
     toast("พิมพ์แก้ข้อความได้เลย เสร็จแล้วกด Esc");
   }
   function stopTextEdit() {
     const el = state.selected;
     state.editingText = false;
-    $("#btn-text").innerHTML = "<span>✏️</span><small>ข้อความ</small>";
+    $("#btn-text").innerHTML = `<span>${ICON.type}</span><small>ข้อความ</small>`;
     if (!el) return;
     el.removeAttribute("contenteditable");
     const before = el._rlTextBefore;
@@ -962,14 +1146,14 @@
     g.style.cssText +=
       `;position:fixed !important; left:0; top:0; width:${r.width}px !important; height:${r.height}px !important;` +
       `margin:0 !important; z-index:2147483645 !important; pointer-events:none !important; opacity:.85 !important;` +
-      `transform-origin:0 0; box-shadow:0 14px 36px rgba(0,0,0,.35) !important; outline:2px solid #7c3aed;` +
+      `transform-origin:0 0; box-shadow:0 14px 36px rgba(0,0,0,.35) !important; outline:2px solid #FF5A3C;` +
       `transition:none !important; overflow:hidden;`;
     // ลากทั้งกลุ่ม: ติดป้ายจำนวนชิ้นบน ghost
     if (d.members && d.members.length > 1) {
       const badge = document.createElement("div");
       badge.textContent = "× " + d.members.length;
       badge.style.cssText =
-        "position:absolute; top:6px; right:6px; background:#7c3aed; color:#fff;" +
+        "position:absolute; top:6px; right:6px; background:#FF5A3C; color:#fff;" +
         "font:700 12px/1.4 sans-serif; padding:2px 9px; border-radius:11px; z-index:9;" +
         "box-shadow:0 2px 8px rgba(0,0,0,.3);";
       g.appendChild(badge);
@@ -1019,7 +1203,7 @@
   function drawDropLine(rect, side) {
     const L = ui.dropline.style;
     L.display = "block";
-    L.background = "#7c3aed";
+    L.background = "#FF5A3C";
     L.outline = "none";
     if (side === "left" || side === "right") {
       L.left = (side === "left" ? rect.left : rect.right) - 2 + "px";
@@ -1038,8 +1222,8 @@
   function drawDropBox(rect) {
     const L = ui.dropline.style;
     L.display = "block";
-    L.background = "rgba(124,58,237,.14)";
-    L.outline = "2px dashed #7c3aed";
+    L.background = "rgba(255,90,60,.14)";
+    L.outline = "2px dashed #FF5A3C";
     L.left = rect.left + 2 + "px";
     L.top = rect.top + 2 + "px";
     L.width = Math.max(0, rect.width - 4) + "px";
@@ -1391,8 +1575,8 @@
     `html[data-rl-mode="edit"], html[data-rl-mode="edit"] *:not(#${HOST_ID}) { cursor: crosshair !important; }\n` +
     // เส้นประของ section/กล่องใหม่ = ไกด์ตอนแก้เท่านั้น ไม่ใช่สไตล์จริง
     // (โหมดใช้งาน / screenshot / export จะไม่มีเส้นประ และ inline style ของผู้ใช้ทับ background นี้ได้)
-    `html[data-rl-mode="edit"] [data-rl-guide] { outline: 2px dashed rgba(124,58,237,.65); outline-offset: -2px; }\n` +
-    `html[data-rl-mode="edit"] [data-rl-guide="section"] { background-color: rgba(124,58,237,.06); }`;
+    `html[data-rl-mode="edit"] [data-rl-guide] { outline: 1.5px dashed rgba(255,90,60,.6); outline-offset: -2px; }\n` +
+    `html[data-rl-mode="edit"] [data-rl-guide="section"] { background-color: rgba(255,90,60,.05); }`;
 
   function setMode(m) {
     state.mode = m;
@@ -1401,9 +1585,13 @@
     $("#mode-action").classList.toggle("on", m === "action");
     ui.hoverbox.style.display = "none";
     if (m === "action" && state.editingText) stopTextEdit();
+    // ซ่อน/คืน mark ของโหมดแก้ไข (กรอบเลือก, dropline, marquee)
+    ui.dropline.style.display = "none";
+    ui.marquee.style.display = "none";
+    refreshBoxes();
     toast(m === "edit"
-      ? "✏️ โหมดแก้ไข — คลิกเพื่อเลือก element"
-      : "🖱 โหมดใช้งาน — คลิกลิงก์/ปุ่มของหน้าได้ตามปกติ");
+      ? "โหมดแก้ไข — คลิกเพื่อเลือก element"
+      : "โหมดใช้งาน — คลิกลิงก์/ปุ่มของหน้าได้ตามปกติ");
   }
 
   // ---------------------------------------------------------------
@@ -1473,7 +1661,7 @@
     }
     select(null);
     updateCounter();
-    toast("🗑 ลบ element แล้ว (↩︎ เอาคืนได้)");
+    toast("ลบ element แล้ว (↩︎ เอาคืนได้)");
   }
 
   // ซ่อนทั้งกลุ่มที่คลุมเลือกไว้ (undo เดียว)
@@ -1501,7 +1689,7 @@
     }, apply);
     setMulti([]);
     updateCounter();
-    toast(`🙈 ซ่อน ${els.length} ชิ้นแล้ว (↩︎ เอาคืนได้)`);
+    toast(`ซ่อน ${els.length} ชิ้นแล้ว (↩︎ เอาคืนได้)`);
   }
 
   // ลบจริงทั้งกลุ่ม (undo เดียว)
@@ -1545,7 +1733,7 @@
     }, apply);
     setMulti([]);
     updateCounter();
-    toast(`🗑 ลบ ${els.length} ชิ้นแล้ว (↩︎ เอาคืนได้)`);
+    toast(`ลบ ${els.length} ชิ้นแล้ว (↩︎ เอาคืนได้)`);
   }
 
   // สลับคอลัมน์ตาราง — สลับ cell ลำดับ a กับ b (ติดกัน) ในทุกแถวของตาราง
@@ -1681,6 +1869,7 @@
     if (!n) { toast("ยังไม่มีการแก้ไขให้รีเซ็ต"); return; }
     if (!confirm(`รีเซ็ตการแก้ไขทั้งหมด (${state.changes.size} element, ${state.addedSections.length} section) กลับสภาพเดิมของหน้า?`)) return;
     if (state.editingText) stopTextEdit();
+    if (state.newPage.active) exitNewPage(true);
     select(null);
     for (const s of state.addedSections) s.el.remove();
     state.addedSections.length = 0;
@@ -1695,7 +1884,149 @@
     updateCounter();
     refreshBoxes();
     scheduleSave(); // จะเคลียร์ draft ใน storage ให้ด้วย
-    toast("♻️ รีเซ็ตทั้งหน้ากลับสภาพเดิมแล้ว");
+    toast("รีเซ็ตทั้งหน้ากลับสภาพเดิมแล้ว");
+  }
+
+  // ---------------------------------------------------------------
+  // โหมดหน้าใหม่ (blank canvas): ซ่อนหน้าเดิม → ออกแบบหน้าใหม่บน canvas ว่าง
+  // ---------------------------------------------------------------
+  function startNewPage(fromCurrent) {
+    if (state.newPage.active) { setTab("add"); return; }
+    if (state.editingText) stopTextEdit();
+    select(null);
+
+    const skipTags = new Set(["SCRIPT", "STYLE", "LINK", "NOSCRIPT", "TEMPLATE"]);
+
+    // ถ้าเอาหน้าเดิมมาเป็น base = ก็อปเนื้อหาปัจจุบัน (สภาพที่เห็นตอนนี้) ก่อนซ่อนของเดิม
+    // ตัด id ทิ้งกัน id ซ้ำกับของเดิมที่ยังอยู่ใน DOM (แต่ถูกซ่อน)
+    const baseClones = [];
+    if (fromCurrent) {
+      for (const el of Array.from(document.body.children)) {
+        if (el === host || skipTags.has(el.tagName)) continue;
+        const c = cleanClone(el.cloneNode(true));
+        c.removeAttribute("id");
+        c.querySelectorAll("[id]").forEach((n) => n.removeAttribute("id"));
+        baseClones.push(c);
+      }
+    }
+
+    // ซ่อน element เดิมทั้งหมดใน body (ข้าม UI ของเรา + tag ที่ไม่ใช่ภาพ)
+    const hidden = [];
+    for (const el of Array.from(document.body.children)) {
+      if (el === host || skipTags.has(el.tagName)) continue;
+      hidden.push({ el, prev: el.style.getPropertyValue("display") });
+      el.style.setProperty("display", "none", "important");
+    }
+    state.newPage.hidden = hidden;
+    state.newPage.prevBodyBg = document.body.style.getPropertyValue("background");
+    // พื้นหลังเทาอ่อน = เห็นขอบ artboard ของหน้า (ความกว้างที่เลือก) ชัดขึ้น
+    document.body.style.setProperty("background", "#eef1f5", "important");
+
+    // canvas: artboard กลางหน้า ตามขนาดหน้าจอที่เลือก (ปรับ max-width ได้ภายหลัง)
+    const canvas = document.createElement("main");
+    canvas.id = NEWPAGE_ID;
+    canvas.style.cssText =
+      `max-width:${state.newPage.width}; margin:0 auto; min-height:100vh; padding:40px 24px;` +
+      "background:#ffffff; box-shadow:0 0 0 1px rgba(15,23,42,.06), 0 12px 40px rgba(15,23,42,.10);" +
+      "font-family:system-ui,-apple-system,'Noto Sans Thai',sans-serif; color:#0f172a; box-sizing:border-box;";
+    if (fromCurrent && baseClones.length) {
+      for (const c of baseClones) canvas.appendChild(c);
+    } else {
+      const ph = document.createElement("div");
+      ph.id = "__rl_np_empty";
+      ph.setAttribute("data-rl-guide", "");
+      ph.style.cssText =
+        "min-height:60vh; display:flex; align-items:center; justify-content:center; text-align:center;" +
+        "color:#94a3b8; font-size:15px; line-height:1.7; padding:24px;";
+      ph.textContent = "หน้าเปล่า — ไปที่แท็บ “เพิ่ม” แล้ววาง กล่อง / รูป / ปุ่ม / หัวข้อ / ข้อความ ลงมาที่นี่";
+      canvas.appendChild(ph);
+    }
+    document.body.appendChild(canvas);
+
+    state.newPage.canvas = canvas;
+    state.newPage.active = true;
+    window.scrollTo(0, 0);
+    updateNewPageUI();
+    setTab("add");
+    toast(fromCurrent
+      ? "ก็อปหน้าเดิมมาเป็น base แล้ว — คลิกเลือก element เพื่อแก้ต่อได้เลย"
+      : "เริ่มหน้าเปล่าใหม่แล้ว — วาง element จากแท็บ “เพิ่ม” ได้เลย");
+  }
+
+  function exitNewPage(force) {
+    if (!state.newPage.active) return;
+    const canvas = state.newPage.canvas;
+    const built = canvas && canvas.querySelectorAll(":scope > :not(#__rl_np_empty)").length > 0;
+    if (!force && built && !confirm("ออกจากหน้าใหม่? element ที่วางไว้บนหน้านี้จะถูกลบทิ้ง (Export ไว้ก่อนได้)")) return;
+    if (state.editingText) stopTextEdit();
+    select(null);
+
+    // ลบ element ที่วางบน canvas ออกจากรายการที่ track ไว้ + ลบ canvas
+    if (canvas) {
+      state.addedSections = state.addedSections.filter((s) => !canvas.contains(s.el));
+      canvas.remove();
+    }
+    // คืนเนื้อหาเดิม
+    for (const { el, prev } of state.newPage.hidden) {
+      if (prev) el.style.setProperty("display", prev);
+      else el.style.removeProperty("display");
+    }
+    if (state.newPage.prevBodyBg) document.body.style.setProperty("background", state.newPage.prevBodyBg);
+    else document.body.style.removeProperty("background");
+
+    state.newPage = { active: false, canvas: null, hidden: [], prevBodyBg: null, width: "1280px" };
+    updateNewPageUI();
+    updateCounter();
+    refreshBoxes();
+    toast("กลับสู่หน้าเดิมแล้ว");
+  }
+
+  // บันทึกหน้าใหม่เป็น "หน้าซ้อน" (full-screen overlay แบบ modal) ฝังในหน้าปัจจุบัน
+  // → ผูกกับปุ่มได้เหมือน modal · export หน้าหลักไปก็คลิกเปิดได้จริง
+  function saveNewPageAsOverlay() {
+    if (!state.newPage.active || !state.newPage.canvas) return;
+    const canvas = state.newPage.canvas;
+    const kids = Array.from(canvas.children).filter((c) => c.id !== "__rl_np_empty");
+    if (!kids.length) { toast("หน้ายังว่าง — วาง element ก่อน แล้วค่อยบันทึก"); return; }
+    if (state.editingText) stopTextEdit();
+
+    const width = state.newPage.width;
+    state.seq += 1;
+    const id = "p" + Date.now().toString(36) + state.seq;
+    const overlay = buildPageOverlay(id, state.seq, width);
+    overlay.style.display = "none"; // สถานะเริ่มต้น: ซ่อน รอปุ่มที่ผูกเปิด
+    const wrap = overlay.querySelector("main");
+    for (const k of kids) wrap.appendChild(cleanClone(k.cloneNode(true)));
+    document.body.appendChild(overlay);
+
+    // ออกจากโหมดหน้าใหม่ (คืนหน้าเดิม + ลบ canvas) แต่คง overlay ไว้
+    exitNewPage(true);
+    trackOverlay(overlay, `บันทึกหน้าซ้อน #${state.seq}`);
+    setTab("edit");
+    toast("บันทึกเป็นหน้าซ้อนแล้ว — เลือกปุ่มบนหน้า แล้วผูกในหมวด “ผูก Modal / หน้า”");
+  }
+
+  // เปลี่ยนความกว้างของหน้าใหม่ (artboard) แบบสด
+  function setNewPageWidth(w) {
+    if (!state.newPage.active || !state.newPage.canvas) return;
+    state.newPage.width = w;
+    state.newPage.canvas.style.maxWidth = w;
+    shadow.querySelectorAll(".np-size").forEach((b) => b.classList.toggle("on", b.dataset.w === w));
+    refreshBoxes();
+    toast("ขนาดหน้า: " + (w === "100%" ? "เต็มความกว้าง" : w));
+  }
+
+  function updateNewPageUI() {
+    const on = state.newPage.active;
+    $("#newpagebar").classList.toggle("show", on);
+    if (on) shadow.querySelectorAll(".np-size").forEach((b) => b.classList.toggle("on", b.dataset.w === state.newPage.width));
+    const b1 = $("#btn-newpage"), b2 = $("#btn-newpage-base");
+    b1.disabled = on; b2.disabled = on;
+    b1.innerHTML = on ? `${ICON.page} กำลังอยู่ในหน้าใหม่` : `${ICON.page} หน้าเปล่า`;
+    b2.innerHTML = `${ICON.copy} ก็อปหน้าเดิม`;
+    $("#newpage-hint").textContent = on
+      ? "กำลังออกแบบหน้าใหม่ · วาง/แก้ element ด้านล่าง แล้วกด “Export หน้านี้” ในแถบด้านบน"
+      : "เลือก “หน้าเปล่า” เริ่มจากศูนย์ หรือ “ก็อปหน้าเดิม” เอาหน้านี้มาเป็นฐานแล้วแก้ต่อ · หน้าเดิมจะถูกซ่อนไว้ · Export เป็นไฟล์ HTML ได้";
   }
 
   function changeImage(src) {
@@ -1750,9 +2081,21 @@
       ref.parentElement.insertBefore(el, ref.nextElementSibling);
       trackAdded(el, "after", cssPath(ref), label);
     } else {
-      document.body.appendChild(el);
-      trackAdded(el, "end", "body", label);
+      const target = newPageTarget();
+      target.appendChild(el);
+      trackAdded(el, "end", target === document.body ? "body" : "#" + NEWPAGE_ID, label);
+      clearNpPlaceholder();
     }
+  }
+
+  // เป้าหมายการวาง element ใหม่ (โหมดหน้าใหม่ = ลงบน canvas เปล่า, ปกติ = ท้าย body)
+  const NEWPAGE_ID = "__rl_newpage";
+  function newPageTarget() {
+    return state.newPage.active && state.newPage.canvas ? state.newPage.canvas : document.body;
+  }
+  function clearNpPlaceholder() {
+    const ph = state.newPage.canvas && state.newPage.canvas.querySelector("#__rl_np_empty");
+    if (ph) ph.remove();
   }
 
   function addSection(position) {
@@ -1776,7 +2119,12 @@
     let refSelector = "body";
     if (position === "before") { ref.parentElement.insertBefore(sec, ref); refSelector = cssPath(ref); }
     else if (position === "after") { ref.parentElement.insertBefore(sec, ref.nextElementSibling); refSelector = cssPath(ref); }
-    else document.body.appendChild(sec);
+    else {
+      const target = newPageTarget();
+      target.appendChild(sec);
+      refSelector = target === document.body ? "body" : "#" + NEWPAGE_ID;
+      clearNpPlaceholder();
+    }
 
     trackAdded(sec, position, refSelector, `เพิ่ม section #${state.seq}`);
   }
@@ -1792,7 +2140,7 @@
       "border-radius:10px; background:#f8fafc; color:#64748b; font-size:13px; font-family:inherit;";
     box.innerHTML = `กล่องใหม่ #${state.seq} — ดับเบิลคลิกแก้ข้อความ · ปรับสี/ขนาด · ลากย้ายได้`;
     insertNew(box, `เพิ่มกล่อง #${state.seq}`);
-    toast("เพิ่มกล่องแล้ว 🔲");
+    toast("เพิ่มกล่องแล้ว");
   }
 
   // เพิ่มรูป placeholder (เลือกแล้วเปลี่ยน URL / ไฟล์ได้จากเครื่องมือรูป)
@@ -1811,7 +2159,7 @@
     img.alt = "รูปใหม่ #" + state.seq;
     img.style.cssText = "display:block; max-width:100%; margin:12px auto; border-radius:8px;";
     insertNew(img, `เพิ่มรูป #${state.seq}`);
-    toast("เพิ่มรูปแล้ว 🖼️ — เลือกรูปเพื่อเปลี่ยน URL/ไฟล์");
+    toast("เพิ่มรูปแล้ว — เลือกรูปเพื่อเปลี่ยน URL/ไฟล์");
   }
 
   // ---------------------------------------------------------------
@@ -1829,11 +2177,10 @@
     return m;
   }
 
-  function addModal() {
-    state.seq += 1;
-    const id = "m" + Date.now().toString(36) + state.seq; // กันชนกับ modal จาก draft เก่า
+  // สร้าง element overlay ของ modal (ยังไม่ใส่ใน DOM / ไม่ track)
+  function buildModalOverlay(id, seq) {
     const overlay = document.createElement("div");
-    overlay.setAttribute("data-rl-added", "modal-" + state.seq);
+    overlay.setAttribute("data-rl-added", "modal-" + seq);
     overlay.setAttribute("data-rl-modal", id);
     overlay.setAttribute("onclick", "if(event.target===this)this.style.display='none'");
     overlay.style.cssText =
@@ -1844,14 +2191,101 @@
       ` box-shadow:0 24px 80px rgba(0,0,0,.35); position:relative; color:#1f2937;">` +
       `<button data-rl-modal-close onclick="this.closest('[data-rl-modal]').style.display='none';return false"` +
       ` style="position:absolute; top:10px; right:12px; border:0; background:none; font-size:20px; cursor:pointer; color:#94a3b8;">✕</button>` +
-      `<h3 style="margin:0 0 10px; font-size:20px;">Modal ใหม่ #${state.seq}</h3>` +
+      `<h3 style="margin:0 0 10px; font-size:20px;">Modal ใหม่ #${seq}</h3>` +
       `<p style="margin:0 0 18px; line-height:1.65; color:#475569;">ดับเบิลคลิกแก้ข้อความได้เลย · เสร็จแล้วกดซ่อน modal ในหมวด "Modal นี้" แล้วไปเลือกปุ่มที่จะผูก</p>` +
       `<button data-rl-modal-close onclick="this.closest('[data-rl-modal]').style.display='none';return false"` +
       ` style="background:#7c3aed; color:#fff; border:0; border-radius:8px; padding:10px 24px; font-weight:600; cursor:pointer;">ปิด</button>` +
       `</div>`;
+    return overlay;
+  }
+
+  // สร้าง element overlay ของหน้าซ้อนเต็มจอ (ยังไม่ใส่ใน DOM / ไม่ track)
+  function buildPageOverlay(id, seq, width) {
+    const overlay = document.createElement("div");
+    overlay.setAttribute("data-rl-added", "page-" + seq);
+    overlay.setAttribute("data-rl-modal", id);
+    overlay.setAttribute("data-rl-page", "1");
+    overlay.style.cssText =
+      "display:flex; position:fixed; inset:0; background:#ffffff; z-index:2147483000;" +
+      "overflow:auto; justify-content:center; align-items:flex-start;";
+    const closeBtn = document.createElement("button");
+    closeBtn.setAttribute("data-rl-modal-close", "");
+    closeBtn.setAttribute("onclick", "this.closest('[data-rl-modal]').style.display='none';return false");
+    closeBtn.style.cssText =
+      "position:fixed; top:16px; left:16px; z-index:1; border:0; background:#0f172a; color:#fff;" +
+      "border-radius:999px; padding:9px 16px; font-size:14px; line-height:1; cursor:pointer;" +
+      "box-shadow:0 4px 16px rgba(0,0,0,.25); font-family:system-ui,'Noto Sans Thai',sans-serif;";
+    closeBtn.textContent = "✕ ปิด";
+    const wrap = document.createElement("main");
+    wrap.style.cssText =
+      `width:100%; max-width:${width}; margin:0; min-height:100vh; padding:40px 24px; box-sizing:border-box;` +
+      "font-family:system-ui,-apple-system,'Noto Sans Thai',sans-serif; color:#0f172a;";
+    overlay.appendChild(closeBtn);
+    overlay.appendChild(wrap);
+    return overlay;
+  }
+
+  // track overlay (modal/หน้า) เป็นรายการที่เพิ่ม โดยไม่ select/scroll (ใช้กับของที่ซ่อน/ลอย)
+  function trackOverlay(overlay, label) {
+    const info = { el: overlay, position: "end", refSelector: "body" };
+    state.addedSections.push(info);
+    pushUndo(label, () => {
+      overlay.remove();
+      const i = state.addedSections.indexOf(info);
+      if (i >= 0) state.addedSections.splice(i, 1);
+      if (state.selected && overlay.contains(state.selected)) select(null);
+      updateCounter();
+    }, () => {
+      document.body.appendChild(overlay);
+      state.addedSections.push(info);
+      updateCounter();
+    });
+    updateCounter();
+  }
+
+  function addModal() {
+    state.seq += 1;
+    const id = "m" + Date.now().toString(36) + state.seq; // กันชนกับ modal จาก draft เก่า
+    const overlay = buildModalOverlay(id, state.seq);
     document.body.appendChild(overlay);
     trackAdded(overlay, "end", "body", `เพิ่ม modal #${state.seq}`);
-    toast("เพิ่ม modal แล้ว 🪟 — แก้ข้อความ/สไตล์ได้เลย แล้วผูกกับปุ่มที่ต้องการ");
+    toast("เพิ่ม modal แล้ว — แก้ข้อความ/สไตล์ได้เลย แล้วผูกกับปุ่มที่ต้องการ");
+  }
+
+  // สร้าง modal/หน้า แล้วผูกกับ element ที่เลือกอยู่ทันที (จบในคลิกเดียว จากแท็บแก้ไข)
+  function createBindTarget(kind) {
+    const btn = state.selected;
+    if (!btn) { toast("เลือกปุ่ม/element ที่จะผูกก่อน"); return; }
+    if (btn.closest("[data-rl-modal]")) { toast("ผูกจาก element ข้างใน modal/หน้าไม่ได้ — เลือกปุ่มบนหน้าหลัก"); return; }
+    state.seq += 1;
+    const id = (kind === "page" ? "p" : "m") + Date.now().toString(36) + state.seq;
+    const overlay = kind === "page"
+      ? buildPageOverlay(id, state.seq, "1280px")
+      : buildModalOverlay(id, state.seq);
+    let editTarget = null;
+    if (kind === "page") {
+      const wrap = overlay.querySelector("main");
+      const h = document.createElement("h2");
+      h.style.cssText = "margin:16px; font-family:inherit;";
+      h.textContent = `หน้าใหม่ #${state.seq} — ดับเบิลคลิกแก้หัวข้อ`;
+      const p = document.createElement("p");
+      p.style.cssText = "margin:12px 16px; line-height:1.7; font-family:inherit;";
+      p.textContent = "แก้เนื้อหาหน้านี้ได้เลย · เพิ่ม element จากแท็บ \"เพิ่ม\" (วางต่อจากที่เลือก) · เสร็จแล้วกดซ่อนในหมวด \"Modal / หน้านี้\"";
+      wrap.appendChild(h);
+      wrap.appendChild(p);
+      editTarget = h;
+    } else {
+      editTarget = overlay.querySelector("h3");
+    }
+    document.body.appendChild(overlay);
+    trackOverlay(overlay, kind === "page" ? `สร้างหน้าซ้อน #${state.seq}` : `เพิ่ม modal #${state.seq}`);
+    bindModalTo(btn, id);
+    overlay.style.display = "flex"; // เปิดค้างไว้ให้แก้เนื้อหาต่อทันที
+    select(editTarget || overlay);
+    toast(
+      (kind === "page" ? "สร้างหน้าและผูกกับ " : "สร้าง modal และผูกกับ ") + shortLabel(btn) +
+      " แล้ว — แก้เนื้อหาได้เลย เสร็จแล้วกด \"ซ่อน\" เพื่อเก็บเป็นสถานะเริ่มต้น"
+    );
   }
 
   function bindModal() {
@@ -1860,6 +2294,14 @@
     const id = $("#in-modal-sel").value;
     if (!id) { toast("ยังไม่มี modal — เพิ่มที่แท็บ \"เพิ่ม\" ก่อน"); return; }
     if (el.closest("[data-rl-modal]")) { toast("ผูกจาก element ข้างใน modal ไม่ได้ — เลือกปุ่มบนหน้า"); return; }
+    bindModalTo(el, id);
+    const m = document.querySelector(`[data-rl-modal="${id}"]`);
+    if (m) m.style.display = "none"; // เก็บ modal เข้าสถานะเริ่มต้น พร้อมลองกด
+    toast(`ผูกแล้ว — สลับ "โหมดใช้งาน" แล้วคลิก ${shortLabel(el)} เพื่อเปิด`);
+  }
+
+  // ผูก el ให้คลิกแล้วเปิด modal/หน้า id (logic กลาง ใช้ทั้งปุ่มผูกและสร้าง+ผูก)
+  function bindModalTo(el, id) {
     const rec = getRecord(el);
     const prev = {
       attr: el.getAttribute("data-rl-opens-modal"),
@@ -1884,10 +2326,7 @@
       if (state.selected === el) populateInspector(el);
     });
     updateCounter();
-    populateInspector(el);
-    const m = document.querySelector(`[data-rl-modal="${id}"]`);
-    if (m) m.style.display = "none"; // เก็บ modal เข้าสถานะเริ่มต้น พร้อมลองกด
-    toast(`🔗 ผูกแล้ว — สลับ "โหมดใช้งาน" แล้วคลิก ${shortLabel(el)} เพื่อเปิด modal`);
+    if (state.selected === el) populateInspector(el);
   }
 
   function unbindModal() {
@@ -1925,7 +2364,7 @@
       "display:inline-block; background:#7c3aed; color:#fff; padding:10px 24px;" +
       "border-radius:8px; font-weight:600; text-decoration:none; margin:8px; font-family:inherit;";
     insertNew(b, `เพิ่มปุ่ม #${state.seq}`);
-    toast("เพิ่มปุ่มแล้ว 🔘 — ดับเบิลคลิกแก้ข้อความ");
+    toast("เพิ่มปุ่มแล้ว — ดับเบิลคลิกแก้ข้อความ");
   }
 
   function addHeadingEl() {
@@ -1969,7 +2408,7 @@
     const el = state.selected;
     if (!el) { toast("เลือก element ที่จะคัดลอกก่อน"); return; }
     state.clipboard = { node: cleanClone(el.cloneNode(true)), from: cssPath(el) };
-    toast(`📄 คัดลอก ${shortLabel(el)} แล้ว — กด "วาง" หรือ ⌘V`);
+    toast(`คัดลอก ${shortLabel(el)} แล้ว — กด "วาง" หรือ ⌘V`);
   }
 
   function pasteClipboard() {
@@ -1979,7 +2418,7 @@
     const el = c.node.cloneNode(true); // วางซ้ำได้หลายครั้ง
     el.setAttribute("data-rl-added", "paste-" + state.seq);
     insertNew(el, `วางสำเนา ${shortLabel(el)}`);
-    toast("📋 วางสำเนาแล้ว");
+    toast("วางสำเนาแล้ว");
   }
 
   function doUndo() {
@@ -2041,25 +2480,48 @@
       }
       if (rec.opensModal) {
         item.opensModal = rec.opensModal;
-        item.summary.push(`ผูกให้คลิกแล้วเปิด modal "${rec.opensModal}"`);
+        const target = document.querySelector(`[data-rl-modal="${rec.opensModal}"]`);
+        const isPage = !!(target && target.hasAttribute("data-rl-page"));
+        item.opensKind = isPage ? "page-overlay" : "modal";
+        item.summary.push(
+          (isPage ? `ผูกให้คลิกแล้วเปิดหน้าซ้อนเต็มจอ` : `ผูกให้คลิกแล้วเปิด modal`) +
+          ` "${rec.opensModal}" (ดู HTML ใน addedSections ที่ data-rl-modal ตรงกัน)`
+        );
       }
       if (rec.hidden) { item.hidden = true; item.summary.push("ซ่อน element นี้"); }
       if (rec.deleted) { item.deleted = true; item.summary.push("ลบ element นี้ออกเลย"); }
       if (item.summary.length) changes.push(item);
     }
-    const added = state.addedSections.map((s) => {
-      // ตัด attribute ไกด์ (เส้นประ) ออกจาก HTML ที่ส่งให้ dev
-      const c = s.el.cloneNode(true);
-      c.removeAttribute("data-rl-guide");
-      c.querySelectorAll("[data-rl-guide]").forEach((n) => n.removeAttribute("data-rl-guide"));
-      return {
-        position: s.position,
-        referenceSelector: s.refSelector,
-        html: c.outerHTML,
-        currentStyles: state.changes.get(s.el)?.styles || {},
-      };
-    });
-    return {
+    // ขณะอยู่ในโหมดหน้าใหม่: element บน canvas อ้าง #__rl_newpage ซึ่งไม่มีในหน้าจริงของ dev
+    // → ไม่รายงานเป็นรายชิ้น แต่รวมเป็น draft ของหน้าใหม่ทั้งหน้า (canvas) แทน
+    const canvas = state.newPage.active ? state.newPage.canvas : null;
+    const added = state.addedSections
+      .filter((s) => !(canvas && canvas.contains(s.el)))
+      .map((s) => {
+        // ตัด attribute ไกด์ (เส้นประ) ออกจาก HTML ที่ส่งให้ dev
+        const c = s.el.cloneNode(true);
+        c.removeAttribute("data-rl-guide");
+        c.querySelectorAll("[data-rl-guide]").forEach((n) => n.removeAttribute("data-rl-guide"));
+        const isPage = s.el.hasAttribute("data-rl-page");
+        const isModal = s.el.hasAttribute("data-rl-modal");
+        const entry = {
+          kind: isPage ? "page-overlay" : isModal ? "modal" : "element",
+          position: s.position,
+          referenceSelector: s.refSelector,
+          html: c.outerHTML,
+          currentStyles: state.changes.get(s.el)?.styles || {},
+        };
+        if (isModal) entry.modalId = s.el.getAttribute("data-rl-modal");
+        if (isPage) {
+          const inner = s.el.querySelector("main");
+          entry.pageWidth = inner ? inner.style.maxWidth || "100%" : "100%";
+          const h = s.el.querySelector("h1,h2,h3,h4");
+          if (h && h.textContent.trim()) entry.pageName = h.textContent.trim().slice(0, 60);
+          entry.note = "หน้าซ้อนเต็มจอ เริ่มต้นซ่อน (display:none) — เปิดโดยปุ่มที่มี data-rl-opens-modal ตรงกับ modalId นี้";
+        }
+        return entry;
+      });
+    const report = {
       tool: "Relayout Editor",
       url: location.href,
       title: document.title,
@@ -2068,11 +2530,22 @@
       changedElements: changes,
       addedSections: added,
     };
+    if (canvas) {
+      const c = cleanClone(canvas.cloneNode(true));
+      c.querySelector("#__rl_np_empty")?.remove();
+      c.removeAttribute("id");
+      report.newPageDraft = {
+        note: "หน้าใหม่ที่กำลังออกแบบค้างอยู่ (ยังไม่บันทึก/ผูก) — ทั้งหน้าเป็นเอกสารใหม่ ไม่ใช่การแก้หน้าเดิม",
+        pageWidth: state.newPage.width,
+        html: c.outerHTML,
+      };
+    }
+    return report;
   }
 
   function exportJSON() {
     const report = buildReport();
-    if (!report.changedElements.length && !report.addedSections.length) {
+    if (!report.changedElements.length && !report.addedSections.length && !report.newPageDraft) {
       toast("ยังไม่มีการแก้ไขให้ export");
       return;
     }
@@ -2080,10 +2553,11 @@
       `relayout-report-${ts()}.json`,
       new Blob([JSON.stringify(report, null, 2)], { type: "application/json" })
     );
-    toast("ดาวน์โหลดรายงาน JSON แล้ว 📋");
+    toast("ดาวน์โหลดรายงาน JSON แล้ว");
   }
 
   function exportHTML() {
+    if (state.newPage.active && state.newPage.canvas) { exportNewPageHTML(); return; }
     const clone = document.documentElement.cloneNode(true);
     clone.querySelector("#" + HOST_ID)?.remove();
     clone.querySelector("#__relayout_mode_style")?.remove();
@@ -2096,7 +2570,32 @@
       `     element ที่แก้จะมี attribute data-rl-changed / section ใหม่มี data-rl-added -->\n`;
     const html = "<!DOCTYPE html>\n" + header + clone.outerHTML;
     download(`relayout-page-${ts()}.html`, new Blob([html], { type: "text/html" }));
-    toast("ดาวน์โหลดหน้า HTML แล้ว 🧾");
+    toast("ดาวน์โหลดหน้า HTML แล้ว");
+  }
+
+  // Export เฉพาะหน้าใหม่ (canvas) เป็นไฟล์ HTML แบบ standalone
+  function exportNewPageHTML() {
+    const canvas = state.newPage.canvas;
+    const empty = canvas.querySelectorAll(":scope > :not(#__rl_np_empty)").length === 0;
+    if (empty) { toast("หน้ายังว่าง — วาง element จากแท็บ “เพิ่ม” ก่อน"); return; }
+    const clone = cleanClone(canvas.cloneNode(true));
+    clone.querySelector("#__rl_np_empty")?.remove();
+    clone.removeAttribute("id");
+    clone.removeAttribute("data-rl-added");
+    // ล้าง chrome เฉพาะตอนแก้ (เงา/ความสูงขั้นต่ำ) — คง max-width ที่เลือกไว้เป็นดีไซน์จริง
+    clone.style.boxShadow = "";
+    clone.style.minHeight = "";
+    const header =
+      `<!-- หน้าใหม่ สร้างด้วย Relayout Editor ${new Date().toISOString()}\n` +
+      `     ต้นทาง: ${location.href} -->\n`;
+    const html =
+      "<!DOCTYPE html>\n" + header +
+      `<html lang="th"><head><meta charset="utf-8">` +
+      `<meta name="viewport" content="width=device-width, initial-scale=1">` +
+      `<title>หน้าใหม่</title></head>` +
+      `<body style="margin:0; background:#fff;">${clone.outerHTML}</body></html>`;
+    download(`relayout-newpage-${ts()}.html`, new Blob([html], { type: "text/html" }));
+    toast("ดาวน์โหลดหน้าใหม่เป็น HTML แล้ว");
   }
 
   // ซ่อน UI + เส้นไกด์ของเราก่อนถ่าย / เอาคืนหลังถ่าย
@@ -2119,7 +2618,7 @@
           fetch(res.dataUrl)
             .then((r) => r.blob())
             .then((blob) => download(`relayout-shot-${ts()}.png`, blob));
-          toast("ดาวน์โหลด screenshot แล้ว 📸");
+          toast("ดาวน์โหลด screenshot แล้ว");
         });
       }, 80);
     });
@@ -2153,7 +2652,7 @@
     }
     if (!has) { toast("ยังไม่มีการแก้สไตล์ให้ export"); return; }
     download(`relayout-styles-${ts()}.css`, new Blob([css], { type: "text/css" }));
-    toast("ดาวน์โหลด CSS แล้ว 🎨");
+    toast("ดาวน์โหลด CSS แล้ว");
   }
 
   // ---------------------------------------------------------------
@@ -2193,7 +2692,7 @@
       );
       c.toBlob((b) => {
         download(`relayout-element-${ts()}.png`, b);
-        toast("📸 ถ่ายเฉพาะ element แล้ว");
+        toast("ถ่ายเฉพาะ element แล้ว");
       });
     };
     img.src = dataUrl;
@@ -2203,7 +2702,7 @@
     const total = Math.min(document.documentElement.scrollHeight, 8000); // กันหน้ายาวอนันต์
     const vh = innerHeight;
     const prevScroll = scrollY;
-    toast("📸 กำลังถ่ายทั้งหน้า อย่าขยับเมาส์/สกรอลล์…");
+    toast("กำลังถ่ายทั้งหน้า อย่าขยับเมาส์/สกรอลล์…");
     await wait(600);
     uiOffForShot();
     const shots = [];
@@ -2234,7 +2733,7 @@
     shots.forEach((s, i) => ctx.drawImage(imgs[i], 0, Math.round(s.actualY * dpr)));
     c.toBlob((b) => {
       download(`relayout-fullpage-${ts()}.png`, b);
-      toast("📸 ดาวน์โหลดภาพทั้งหน้าแล้ว");
+      toast("ดาวน์โหลดภาพทั้งหน้าแล้ว");
     });
   }
 
@@ -2340,6 +2839,19 @@
       state.addedSections.push({ el, position: add.position, refSelector: add.referenceSelector });
       ok++;
     }
+    // กู้หน้าใหม่ที่ออกแบบค้างไว้ (ยังไม่บันทึกเป็นหน้าซ้อน) → เข้าโหมดหน้าใหม่แล้วเทเนื้อหาคืน
+    if (report.newPageDraft && report.newPageDraft.html && !state.newPage.active) {
+      state.newPage.width = report.newPageDraft.pageWidth || "1280px";
+      startNewPage(false);
+      const tpl = document.createElement("template");
+      tpl.innerHTML = report.newPageDraft.html.trim();
+      const src = tpl.content.firstElementChild;
+      if (src && state.newPage.canvas) {
+        clearNpPlaceholder();
+        while (src.firstChild) state.newPage.canvas.appendChild(src.firstChild);
+        ok++;
+      } else fail++;
+    }
     updateCounter();
     refreshBoxes();
     scheduleSave();
@@ -2351,10 +2863,10 @@
     if (state.changes.size || state.addedSections.length) return;
     storageGet((saved) => {
       if (!saved) return;
-      const n = (saved.changedElements || []).length + (saved.addedSections || []).length;
+      const n = (saved.changedElements || []).length + (saved.addedSections || []).length + (saved.newPageDraft ? 1 : 0);
       if (!n) return;
       $("#restore-info").textContent =
-        `💾 พบงานที่ค้างไว้ ${n} รายการ (${new Date(saved.exportedAt).toLocaleString("th-TH")})`;
+        `พบงานที่ค้างไว้ ${n} รายการ (${new Date(saved.exportedAt).toLocaleString("th-TH")})`;
       $("#restorebar").classList.add("show");
       $("#btn-restore").onclick = () => {
         const res = applyReport(saved);
@@ -2375,7 +2887,7 @@
       try {
         const report = JSON.parse(reader.result);
         const res = applyReport(report);
-        toast(`📥 import แล้ว ${res.ok} รายการ` + (res.fail ? ` · หา element ไม่เจอ ${res.fail}` : ""));
+        toast(`import แล้ว ${res.ok} รายการ` + (res.fail ? ` · หา element ไม่เจอ ${res.fail}` : ""));
       } catch {
         toast("ไฟล์ JSON ไม่ถูกต้อง");
       }
@@ -2445,7 +2957,7 @@
       if (list.length > 30) list.length = 30; // เก็บล่าสุด 30 ชิ้นพอ
       assetsSet(list);
       refreshAssetList();
-      toast(`📦 เก็บ "${asset.name}" เข้าคลังแล้ว — เปิด editor หน้าไหนก็เอาไปวางได้`);
+      toast(`เก็บ "${asset.name}" เข้าคลังแล้ว — เปิด editor หน้าไหนก็เอาไปวางได้`);
     });
   }
 
@@ -2457,7 +2969,7 @@
     state.seq += 1;
     el.setAttribute("data-rl-added", "asset-" + state.seq);
     insertNew(el, `วาง asset "${asset.name}"`);
-    toast(`📌 วาง "${asset.name}" แล้ว`);
+    toast(`วาง "${asset.name}" แล้ว`);
   }
 
   function refreshAssetList() {
@@ -2477,11 +2989,11 @@
         lbl.title = `จาก ${asset.from}\nคลิกเพื่อวางลงหน้า`;
         lbl.addEventListener("click", () => insertAsset(asset));
         const put = document.createElement("button");
-        put.textContent = "📌";
+        put.innerHTML = ICON.plus;
         put.title = "วางลงหน้า (ต่อจาก element ที่เลือก)";
         put.addEventListener("click", () => insertAsset(asset));
         const del = document.createElement("button");
-        del.textContent = "🗑";
+        del.innerHTML = ICON.trash;
         del.title = "ลบออกจากคลัง";
         del.addEventListener("click", () => {
           assetsGet((cur) => {
@@ -2540,7 +3052,7 @@
       row.append(lbl, kinds);
       if (!it.added) {
         const rs = document.createElement("button");
-        rs.textContent = "♻️";
+        rs.innerHTML = ICON.reset;
         rs.title = "รีเซ็ต element นี้กลับค่าเดิม";
         rs.addEventListener("click", () => {
           restoreElement(it.el, it.rec);
@@ -2575,7 +3087,7 @@
       for (const s of state.addedSections) if (!s.el.isConnected) lost++;
       if (lost && !spaWarned) {
         spaWarned = true;
-        toast(`⚠️ หน้าเว็บ render ทับ — การแก้ไข ${lost} รายการหลุดจากหน้า (ใช้ปุ่มกู้คืน/import ได้)`);
+        toast(`หน้าเว็บ render ทับ — การแก้ไข ${lost} รายการหลุดจากหน้า (ใช้ปุ่มกู้คืน/import ได้)`);
       }
       if (!lost) spaWarned = false;
     }, 800);
@@ -2593,7 +3105,7 @@
       }
       const outer = width + (window.outerWidth - window.innerWidth);
       chrome.runtime.sendMessage({ type: "rl-resize", width: outer });
-      toast(`📐 ปรับ viewport เป็น ~${width}px`);
+      toast(`ปรับ viewport เป็น ~${width}px`);
     } catch {
       toast("ปรับขนาดหน้าต่างไม่ได้ในโหมดนี้");
     }
@@ -2612,7 +3124,7 @@
   );
   $("#btn-min").addEventListener("click", () => {
     const min = ui.panel.classList.toggle("min");
-    $("#btn-min").textContent = min ? "▔" : "▁";
+    $("#btn-min").innerHTML = min ? ICON.chevDown : ICON.chevUp;
     $("#btn-min").title = min ? "ขยาย panel" : "ย่อ panel";
   });
   $("#btn-close").addEventListener("click", () => api.toggle());
@@ -2647,20 +3159,30 @@
   $("#btn-add-modal").addEventListener("click", addModal);
   $("#btn-bind-modal").addEventListener("click", bindModal);
   $("#btn-unbind-modal").addEventListener("click", unbindModal);
+  $("#btn-create-modal-bind").addEventListener("click", () => createBindTarget("modal"));
+  $("#btn-create-page-bind").addEventListener("click", () => createBindTarget("page"));
   $("#btn-modal-open").addEventListener("click", () => {
     const id = $("#in-modal-sel").value;
-    if (id && openModal(id)) toast("👁 เปิด modal ให้ดู/แก้แล้ว");
+    if (id && openModal(id)) toast("เปิด modal ให้ดู/แก้แล้ว");
   });
   $("#btn-modal-hide").addEventListener("click", () => {
     const m = state.selected && state.selected.closest && state.selected.closest("[data-rl-modal]");
     if (!m) return;
     m.style.display = "none";
     select(null);
-    toast("🙈 ซ่อน modal แล้ว (สถานะเริ่มต้น) — เลือกปุ่มแล้วผูกได้เลย");
+    toast("ซ่อน modal แล้ว (สถานะเริ่มต้น) — เลือกปุ่มแล้วผูกได้เลย");
   });
   $("#btn-add-before").addEventListener("click", () => addSection("before"));
   $("#btn-add-after").addEventListener("click", () => addSection("after"));
   $("#btn-add-end").addEventListener("click", () => addSection("end"));
+  $("#btn-newpage").addEventListener("click", () => startNewPage(false));
+  $("#btn-newpage-base").addEventListener("click", () => startNewPage(true));
+  $("#btn-np-bind").addEventListener("click", saveNewPageAsOverlay);
+  $("#btn-np-export").addEventListener("click", exportNewPageHTML);
+  $("#btn-np-exit").addEventListener("click", () => exitNewPage(false));
+  shadow.querySelectorAll(".np-size").forEach((b) =>
+    b.addEventListener("click", () => setNewPageWidth(b.dataset.w))
+  );
   $("#btn-export-json").addEventListener("click", exportJSON);
   $("#btn-export-css").addEventListener("click", exportCSS);
   $("#btn-export-html").addEventListener("click", exportHTML);
@@ -2751,7 +3273,7 @@
     const n = Object.keys(props).length;
     if (!n) { toast(bad.length ? "CSS ไม่ถูกต้อง: " + bad[0] : "ยังไม่ได้พิมพ์ CSS"); return; }
     applyStyles(el, props, `custom CSS ที่ ${shortLabel(el)}`);
-    toast(`✨ ใช้ CSS แล้ว ${n} รายการ` + (bad.length ? ` · ข้ามที่ไม่ถูกต้อง ${bad.length}` : ""));
+    toast(`ใช้ CSS แล้ว ${n} รายการ` + (bad.length ? ` · ข้ามที่ไม่ถูกต้อง ${bad.length}` : ""));
   });
   $("#in-css").addEventListener("keydown", (e) => e.stopPropagation()); // กันคีย์ลัดของ editor แย่งตอนพิมพ์
   const applyBorder = () => {
@@ -2900,11 +3422,12 @@
     updateUndoButton();
     checkDraft();
     refreshAssetList();
-    toast("🎨 Relayout Editor เปิดแล้ว — คลิกเลือก element ได้เลย");
+    toast("Relayout Editor เปิดแล้ว — คลิกเลือก element ได้เลย");
   }
 
   function disable() {
     if (state.editingText) stopTextEdit();
+    if (state.newPage.active) exitNewPage(true);
     if (state.dragging) { removeGhost(state.dragging); state.dragging = null; }
     state.enabled = false;
     select(null);
