@@ -239,6 +239,9 @@
     pin: svg('<path d="M12 17v5"/><path d="M9 3h6l-1 6 3 3H7l3-3z"/>'),
     page: svg('<path d="M6 2h8l4 4v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/><path d="M14 2v4h4"/><path d="M9 13h6M9 17h4"/>'),
     expand: svg('<path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M21 16v3a2 2 0 0 1-2 2h-3M3 16v3a2 2 0 0 0 2 2h3"/>'),
+    dropdown: svg('<rect x="3" y="6" width="18" height="12" rx="2"/><path d="m14 10 2 2 2-2"/>'),
+    radio: svg('<circle cx="7" cy="8" r="2.5"/><path d="M13 8h6"/><circle cx="7" cy="16" r="2.5" fill="currentColor" stroke="none"/><path d="M13 16h6"/>'),
+    calendar: svg('<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 9h18M8 3v4M16 3v4"/>'),
   };
 
   shadow.innerHTML = `
@@ -405,6 +408,17 @@
     textarea:focus { border-color: var(--red); box-shadow: 0 0 0 2px var(--red-soft); }
     .imgrow { display: none; }
     .imgrow.show { display: block; }
+    .optlist { display: flex; flex-direction: column; gap: 5px; margin-bottom: 7px; }
+    .optrow { display: flex; align-items: center; gap: 6px; }
+    .optrow input { flex: 1; min-width: 0; }
+    .optrow .idx { font-family: var(--mono); font-size: 10.5px; color: var(--paper-3); width: 16px; flex: none; text-align: right; }
+    .optrow .opt-del {
+      flex: none; width: 26px; height: 26px; display: grid; place-items: center;
+      background: transparent; border: 1px solid var(--line-2); border-radius: 5px;
+      color: var(--paper-2); cursor: pointer; padding: 0;
+    }
+    .optrow .opt-del:hover { border-color: var(--red); color: var(--red); }
+    .optrow .opt-del svg { width: 13px; height: 13px; }
     .filelabel {
       display: flex; align-items: center; justify-content: center; gap: 7px; text-align: center;
       background: var(--ink-3); border: 1px dashed var(--line-2);
@@ -641,6 +655,19 @@
               </details>
             </div>
 
+            <div class="imgrow" id="field-tools">
+              <details class="sec" open>
+                <summary id="field-title">ตัวเลือก</summary>
+                <div class="secbody">
+                  <div class="optlist" id="field-opts"></div>
+                  <div class="btnrow">
+                    <button class="act" id="btn-opt-add">${ICON.plus} เพิ่มตัวเลือก</button>
+                  </div>
+                  <div class="hint">แก้ข้อความในช่อง = เปลี่ยนชื่อตัวเลือก · กด ✕ ลบ · ต้องเหลืออย่างน้อย 1</div>
+                </div>
+              </details>
+            </div>
+
             <details class="sec" open>
               <summary>สี & ตัวอักษร</summary>
               <div class="secbody">
@@ -762,6 +789,12 @@
             <button id="btn-add-modal" title="กล่อง modal ลอยกลางจอ — ผูกกับปุ่มให้คลิกเปิดได้"><span>${ICON.window}</span><small>Modal</small></button>
             <button id="btn-paste" title="วาง element ที่คัดลอกไว้ (⌘V)"><span>${ICON.paste}</span><small>วาง ⌘V</small></button>
           </div>
+          <h4>ฟอร์ม</h4>
+          <div class="qa qa3">
+            <button id="btn-add-dropdown" title="Dropdown / select — แก้ตัวเลือกได้ในโค้ดที่ export"><span>${ICON.dropdown}</span><small>Dropdown</small></button>
+            <button id="btn-add-radio" title="กลุ่มปุ่ม radio เลือกได้อย่างเดียว"><span>${ICON.radio}</span><small>Radio</small></button>
+            <button id="btn-add-date" title="ช่องเลือกวันที่ (date picker)"><span>${ICON.calendar}</span><small>วันที่</small></button>
+          </div>
           <h4>Section</h4>
           <div class="btnrow">
             <button class="act" id="btn-add-before">${ICON.plus} ก่อนที่เลือก</button>
@@ -834,6 +867,7 @@
     seldims: $("#sel-dims"),
     inspector: $("#inspector"),
     imgtools: $("#img-tools"),
+    fieldtools: $("#field-tools"),
     toast: $(".toast"),
     counter: $("#counter"),
   };
@@ -1046,6 +1080,10 @@
     ui.imgtools.classList.toggle("show", isImg);
     $("#col-tools").classList.toggle("show", !!(el.closest && el.closest("td, th")));
     $("#in-imgurl").value = "";
+    // เครื่องมือจัดการตัวเลือก (dropdown / radio)
+    const field = fieldRoot(el);
+    ui.fieldtools.classList.toggle("show", !!field);
+    if (field) renderFieldTools(field);
     // เครื่องมือ modal + หมวดผูก modal
     $("#modal-tools").classList.toggle("show", !!(el.closest && el.closest("[data-rl-modal]")));
     const modals = Array.from(document.querySelectorAll("[data-rl-modal]"));
@@ -2077,7 +2115,7 @@
   // แทรก element ใหม่: ต่อหลัง element ที่เลือกอยู่ ถ้าไม่ได้เลือกอะไร = ต่อท้ายหน้า
   function insertNew(el, label) {
     const ref = state.selected;
-    if (ref && ref.parentElement) {
+    if (ref && ref.isConnected && ref.parentElement) {
       ref.parentElement.insertBefore(el, ref.nextElementSibling);
       trackAdded(el, "after", cssPath(ref), label);
     } else {
@@ -2385,6 +2423,162 @@
     p.style.cssText = "margin:12px 16px; line-height:1.7; font-family:inherit;";
     insertNew(p, `เพิ่มข้อความ #${state.seq}`);
     toast("เพิ่มย่อหน้าข้อความแล้ว");
+  }
+
+  // ฟอร์ม — element พื้นฐาน (native tag + inline style ครบ ติดไป export/report เอง)
+  const FIELD_WRAP =
+    "margin:12px 16px; font-family:inherit; max-width:360px;";
+  const FIELD_LABEL =
+    "display:block; font-size:14px; font-weight:600; margin-bottom:6px; color:#374151;";
+  const FIELD_CTRL =
+    "width:100%; box-sizing:border-box; padding:10px 12px; border:1px solid #cbd5e1;" +
+    "border-radius:8px; font-size:14px; font-family:inherit; background:#fff; color:#1f2937;";
+
+  function addDropdown() {
+    state.seq += 1;
+    const wrap = document.createElement("div");
+    wrap.setAttribute("data-rl-added", "dropdown-" + state.seq);
+    wrap.style.cssText = FIELD_WRAP;
+    wrap.innerHTML =
+      `<label style="${FIELD_LABEL}">เลือกตัวเลือก</label>` +
+      `<select style="${FIELD_CTRL}">` +
+      `<option>ตัวเลือกที่ 1</option><option>ตัวเลือกที่ 2</option><option>ตัวเลือกที่ 3</option>` +
+      `</select>`;
+    insertNew(wrap, `เพิ่ม dropdown #${state.seq}`);
+    toast("เพิ่ม dropdown แล้ว — ดับเบิลคลิก label แก้ข้อความ · ตัวเลือกแก้ในโค้ดที่ export");
+  }
+
+  function addRadio() {
+    state.seq += 1;
+    const name = "rl-radio-" + state.seq;
+    const opt = (text, checked) =>
+      `<label style="display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:14px; cursor:pointer;">` +
+      `<input type="radio" name="${name}"${checked ? " checked" : ""} style="width:16px; height:16px; accent-color:#2563eb;"> ${text}</label>`;
+    const wrap = document.createElement("div");
+    wrap.setAttribute("data-rl-added", "radio-" + state.seq);
+    wrap.style.cssText = FIELD_WRAP;
+    wrap.innerHTML =
+      `<label style="${FIELD_LABEL}">เลือกอย่างใดอย่างหนึ่ง</label>` +
+      opt("ตัวเลือก A", true) + opt("ตัวเลือก B", false) + opt("ตัวเลือก C", false);
+    insertNew(wrap, `เพิ่ม radio #${state.seq}`);
+    toast("เพิ่มกลุ่ม radio แล้ว — ดับเบิลคลิกแก้ข้อความตัวเลือก");
+  }
+
+  function addDatepicker() {
+    state.seq += 1;
+    const wrap = document.createElement("div");
+    wrap.setAttribute("data-rl-added", "date-" + state.seq);
+    wrap.style.cssText = FIELD_WRAP;
+    wrap.innerHTML =
+      `<label style="${FIELD_LABEL}">เลือกวันที่</label>` +
+      `<input type="date" style="${FIELD_CTRL}">`;
+    insertNew(wrap, `เพิ่ม date picker #${state.seq}`);
+    toast("เพิ่มช่องเลือกวันที่แล้ว");
+  }
+
+  // ---------------------------------------------------------------
+  // จัดการตัวเลือกของ dropdown / radio ในโหมดแก้ไข
+  // ---------------------------------------------------------------
+  let currentField = null; // { root, kind } ของ field ที่กำลังเลือกอยู่
+
+  function fieldRoot(el) {
+    if (!el || !el.closest) return null;
+    const root = el.closest("[data-rl-added]");
+    if (!root) return null;
+    if (root.querySelector("select")) return { root, kind: "dropdown" };
+    if (root.querySelector('input[type="radio"]')) return { root, kind: "radio" };
+    return null;
+  }
+
+  // อ่าน/เขียนข้อความของแต่ละตัวเลือก (เก็บ input ปุ่ม radio ไว้ครบ)
+  function radioText(label) { return label.textContent.trim(); }
+  function setRadioText(label, text) {
+    for (const n of [...label.childNodes]) if (n.nodeType === 3) label.removeChild(n);
+    label.appendChild(document.createTextNode(" " + text));
+  }
+
+  function fieldOptions(field) {
+    return field.kind === "dropdown"
+      ? [...field.root.querySelectorAll("select > option")]
+      : [...field.root.querySelectorAll('input[type="radio"]')].map((r) => r.closest("label"));
+  }
+  function optText(field, node) {
+    return field.kind === "dropdown" ? node.textContent : radioText(node);
+  }
+  function setOptText(field, node, text) {
+    if (field.kind === "dropdown") node.textContent = text;
+    else setRadioText(node, text);
+  }
+
+  function renderFieldTools(field) {
+    currentField = field;
+    $("#field-title").textContent =
+      field.kind === "dropdown" ? "ตัวเลือก · dropdown" : "ตัวเลือก · radio";
+    const list = $("#field-opts");
+    list.innerHTML = "";
+    const opts = fieldOptions(field);
+    opts.forEach((node, i) => {
+      const row = document.createElement("div");
+      row.className = "optrow";
+      const idx = document.createElement("span");
+      idx.className = "idx";
+      idx.textContent = i + 1;
+      const inp = document.createElement("input");
+      inp.type = "text";
+      inp.value = optText(field, node);
+      inp.addEventListener("input", () => {
+        setOptText(field, node, inp.value);
+        afterFieldChange();
+      });
+      const del = document.createElement("button");
+      del.className = "opt-del";
+      del.title = "ลบตัวเลือกนี้";
+      del.innerHTML = ICON.close;
+      del.addEventListener("click", () => removeOption(field, node));
+      row.append(idx, inp, del);
+      list.appendChild(row);
+    });
+  }
+
+  function removeOption(field, node) {
+    if (fieldOptions(field).length <= 1) { toast("ต้องเหลืออย่างน้อย 1 ตัวเลือก"); return; }
+    // ถ้ากำลังเลือก element ที่อยู่ในตัวเลือกที่จะลบ ให้ย้ายการเลือกไปที่ตัว field ก่อน (กัน selection ค้างบน node ที่หลุด)
+    if (state.selected && (node === state.selected || node.contains(state.selected))) select(field.root);
+    node.remove();
+    renderFieldTools(field);
+    afterFieldChange();
+    toast("ลบตัวเลือกแล้ว");
+  }
+
+  function addOption(field) {
+    const n = fieldOptions(field).length + 1;
+    if (field.kind === "dropdown") {
+      const o = document.createElement("option");
+      o.textContent = "ตัวเลือกที่ " + n;
+      field.root.querySelector("select").appendChild(o);
+    } else {
+      const input = field.root.querySelector('input[type="radio"]');
+      const name = input ? input.name : "rl-radio-" + state.seq;
+      const label = document.createElement("label");
+      label.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:6px; font-size:14px; cursor:pointer;";
+      const r = document.createElement("input");
+      r.type = "radio";
+      r.name = name;
+      r.style.cssText = "width:16px; height:16px; accent-color:#2563eb;";
+      label.appendChild(r);
+      label.appendChild(document.createTextNode(" ตัวเลือก " + String.fromCharCode(64 + n)));
+      field.root.appendChild(label);
+    }
+    renderFieldTools(field);
+    afterFieldChange();
+    toast("เพิ่มตัวเลือกแล้ว");
+  }
+
+  // ตัวเลือกอยู่ใน element ที่ addedSections ติดตามอยู่แล้ว → report/draft อ่าน outerHTML สดเอง
+  function afterFieldChange() {
+    refreshBoxes();
+    checkDraft();
+    scheduleSave();
   }
 
   // ---------------------------------------------------------------
@@ -3157,6 +3351,10 @@
   $("#btn-add-head").addEventListener("click", addHeadingEl);
   $("#btn-add-text").addEventListener("click", addTextEl);
   $("#btn-add-modal").addEventListener("click", addModal);
+  $("#btn-add-dropdown").addEventListener("click", addDropdown);
+  $("#btn-add-radio").addEventListener("click", addRadio);
+  $("#btn-add-date").addEventListener("click", addDatepicker);
+  $("#btn-opt-add").addEventListener("click", () => { if (currentField) addOption(currentField); });
   $("#btn-bind-modal").addEventListener("click", bindModal);
   $("#btn-unbind-modal").addEventListener("click", unbindModal);
   $("#btn-create-modal-bind").addEventListener("click", () => createBindTarget("modal"));
